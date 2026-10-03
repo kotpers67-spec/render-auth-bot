@@ -2,14 +2,10 @@ import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import path from 'path';
-import { fileURLToPath } from 'url';
 import { Bot } from 'grammy';
 import { verifyTelegramAuth } from './telegram.js';
 
 dotenv.config();
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
 
 const app = express();
 const PORT = process.env.PORT || 10000;
@@ -19,7 +15,7 @@ app.use(cors());
 app.use(express.json({ limit: '10mb' }));
 
 // Serve Web Application Frontend
-const publicPath = path.join(__dirname, '..', 'public');
+const publicPath = path.resolve('public');
 app.use(express.static(publicPath));
 
 // 1. Health Status Ping Endpoint for Mobile App Fallback Check
