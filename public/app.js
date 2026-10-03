@@ -47,15 +47,23 @@
 
     // Auth forms
     tabLogin: document.getElementById('tab-login'),
+    tabPin: document.getElementById('tab-pin'),
     tabRegister: document.getElementById('tab-register'),
     formLogin: document.getElementById('form-login'),
+    formPin: document.getElementById('form-pin'),
     formRegister: document.getElementById('form-register'),
     loginUsername: document.getElementById('login-username'),
     loginPassword: document.getElementById('login-password'),
+    loginPinCode: document.getElementById('login-pin-code'),
     regUsername: document.getElementById('reg-username'),
     regPassword: document.getElementById('reg-password'),
     regFullname: document.getElementById('reg-fullname'),
     regPhone: document.getElementById('reg-phone'),
+    btnTelegramAuth: document.getElementById('btn-telegram-auth'),
+    dialogTelegramAuth: document.getElementById('dialog-telegram-auth'),
+    formTelegramAuth: document.getElementById('form-telegram-auth'),
+    tgInputUsername: document.getElementById('tg-input-username'),
+    btnCancelTgDialog: document.getElementById('btn-cancel-tg-dialog'),
 
     // Athlete Workout
     athleteDateDisplay: document.getElementById('athlete-date-display'),
@@ -1008,15 +1016,29 @@
     // Auth Switcher tabs
     el.tabLogin.onclick = () => {
       el.tabLogin.classList.add('active');
+      el.tabPin?.classList.remove('active');
       el.tabRegister.classList.remove('active');
       el.formLogin.style.display = 'block';
+      if (el.formPin) el.formPin.style.display = 'none';
       el.formRegister.style.display = 'none';
     };
+    if (el.tabPin) {
+      el.tabPin.onclick = () => {
+        el.tabPin.classList.add('active');
+        el.tabLogin.classList.remove('active');
+        el.tabRegister.classList.remove('active');
+        if (el.formPin) el.formPin.style.display = 'block';
+        el.formLogin.style.display = 'none';
+        el.formRegister.style.display = 'none';
+      };
+    }
     el.tabRegister.onclick = () => {
       el.tabRegister.classList.add('active');
       el.tabLogin.classList.remove('active');
+      el.tabPin?.classList.remove('active');
       el.formRegister.style.display = 'block';
       el.formLogin.style.display = 'none';
+      if (el.formPin) el.formPin.style.display = 'none';
     };
 
     // Role selector card toggles
@@ -1049,6 +1071,31 @@
       } catch {}
     };
 
+    // PIN Login Form Submit (Direct Google Drive Cloud Sync)
+    if (el.formPin) {
+      el.formPin.onsubmit = async (e) => {
+        e.preventDefault();
+        const pin = el.loginPinCode.value.trim().replace(/\D/g, '');
+        if (pin.length !== 6) {
+          showToast('Введите 6 цифр вашего PIN-кода', 'error');
+          return;
+        }
+
+        showToast('Поиск аккаунта в Google Диске...', 'info');
+        try {
+          const data = await api('/api/login/pin', {
+            method: 'POST',
+            body: JSON.stringify({ pin })
+          });
+          state.token = data.token;
+          state.user = data.user;
+          localStorage.setItem('fit_token', data.token);
+          setupAppForRole(data.user.role);
+          showToast(`Вход из облака выполнен: ${data.user.fullName || data.user.username}!`, 'success');
+        } catch (_) {}
+      };
+    }
+
     // Register Form Submit
     el.formRegister.onsubmit = async (e) => {
       e.preventDefault();
@@ -1070,6 +1117,72 @@
         showToast('Аккаунт успешно создан!', 'success');
       } catch {}
     };
+
+    // Telegram Fast Auth Button
+    if (el.btnTelegramAuth) {
+      el.btnTelegramAuth.onclick = async () => {
+        // If running inside Telegram Mini App
+        if (window.Telegram?.WebApp?.initData) {
+          showToast('Авторизация через Telegram...', 'info');
+          try {
+            const data = await api('/api/auth/telegram', {
+              method: 'POST',
+              body: JSON.stringify({ initData: window.Telegram.WebApp.initData })
+            });
+            state.token = data.token;
+            state.user = data.user;
+            localStorage.setItem('fit_token', data.token);
+            setupAppForRole(data.user.role);
+            showToast(`Вход выполнен: ${data.user.fullName || data.user.username}!`, 'success');
+            return;
+          } catch (_) {}
+        }
+
+        // Outside Telegram WebApp: show universal modal
+        if (el.dialogTelegramAuth) {
+          el.dialogTelegramAuth.classList.remove('hidden');
+          el.dialogTelegramAuth.style.display = 'flex';
+          el.tgInputUsername?.focus();
+        }
+      };
+    }
+
+    // Cancel Telegram Dialog
+    if (el.btnCancelTgDialog) {
+      el.btnCancelTgDialog.onclick = () => {
+        if (el.dialogTelegramAuth) {
+          el.dialogTelegramAuth.classList.add('hidden');
+          el.dialogTelegramAuth.style.display = 'none';
+        }
+      };
+    }
+
+    // Telegram Modal Submit
+    if (el.formTelegramAuth) {
+      el.formTelegramAuth.onsubmit = async (e) => {
+        e.preventDefault();
+        const username = el.tgInputUsername.value.trim();
+        const requestedRole = document.querySelector('input[name="tg-reg-role"]:checked')?.value || 'athlete';
+        if (!username) return;
+
+        showToast('Вход через Telegram...', 'info');
+        try {
+          const data = await api('/api/auth/telegram', {
+            method: 'POST',
+            body: JSON.stringify({ username, requestedRole })
+          });
+          state.token = data.token;
+          state.user = data.user;
+          localStorage.setItem('fit_token', data.token);
+          if (el.dialogTelegramAuth) {
+            el.dialogTelegramAuth.classList.add('hidden');
+            el.dialogTelegramAuth.style.display = 'none';
+          }
+          setupAppForRole(data.user.role);
+          showToast(`Добро пожаловать, ${data.user.fullName || data.user.username}!`, 'success');
+        } catch (_) {}
+      };
+    }
 
     // Athlete Date Navigator
     el.btnAthleteDatePrev.onclick = () => changeAthleteDate(-1);

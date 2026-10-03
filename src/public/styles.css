@@ -1182,7 +1182,23 @@ input:checked + .slider:before {
   }
 }
 
-/* Dialog Styles */
+/* Universal Modal & Dialog Styles */
+.app-modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.85);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 99999;
+  padding: 16px;
+}
+.app-modal-overlay.hidden {
+  display: none !important;
+}
+
 .app-dialog {
   background: var(--bg-surface);
   border: 1px solid var(--border-subtle);

@@ -61,9 +61,10 @@
             </div>
           </div>
 
-          <!-- Switcher tabs: Вход / Регистрация -->
+          <!-- Switcher tabs: Вход / PIN / Регистрация -->
           <div class="auth-tab-row">
             <button id="tab-login" class="auth-tab active">Вход</button>
+            <button id="tab-pin" class="auth-tab">По PIN</button>
             <button id="tab-register" class="auth-tab">Регистрация</button>
           </div>
 
@@ -71,13 +72,25 @@
           <form id="form-login">
             <div class="form-group">
               <label for="login-username" class="field-label">Логин</label>
-              <input type="text" id="login-username" class="app-input" placeholder="Введите логин (латиница или кириллица)" autocomplete="username" required>
+              <input type="text" id="login-username" class="app-input" placeholder="Введите логин или 6-значный PIN" autocomplete="username" required>
             </div>
             <div class="form-group">
               <label for="login-password" class="field-label">Пароль</label>
               <input type="password" id="login-password" class="app-input" placeholder="Введите пароль" autocomplete="current-password" required>
             </div>
             <button type="submit" class="app-btn btn-primary" id="btn-submit-login">Войти в аккаунт</button>
+          </form>
+
+          <!-- Form: PIN Login (From Mobile App) -->
+          <form id="form-pin" style="display: none;">
+            <div class="form-group">
+              <label for="login-pin-code" class="field-label">6-значный PIN из Athlete Pro</label>
+              <input type="text" id="login-pin-code" class="app-input" placeholder="Например: 123456" maxlength="6" inputmode="numeric" required>
+            </div>
+            <p style="font-size: 11px; color: var(--text-secondary); margin-bottom: 12px; line-height: 1.4;">
+              Введите PIN-код из приложения на телефоне — сайт мгновенно подтянет ваш профиль и тренировки из Google Диска.
+            </p>
+            <button type="submit" class="app-btn btn-primary" id="btn-submit-pin">Синхронизировать и войти</button>
           </form>
 
           <!-- Form: Register -->
@@ -515,9 +528,9 @@
         </button>
       </section>
 
-      <!-- Dialog: Telegram Auth Modal -->
-      <dialog id="dialog-telegram-auth" class="app-dialog">
-        <div class="dialog-content">
+      <!-- Dialog: Telegram Auth Modal (Universal Modal Overlay) -->
+      <div id="dialog-telegram-auth" class="app-modal-overlay hidden">
+        <div class="app-dialog">
           <div class="dialog-title">ВХОД ЧЕРЕЗ TELEGRAM</div>
           <p class="dialog-subtitle">Мгновенный вход в экосистему через Telegram</p>
           
@@ -549,7 +562,7 @@
             </div>
           </form>
         </div>
-      </dialog>
+      </div>
 
     </main>
 

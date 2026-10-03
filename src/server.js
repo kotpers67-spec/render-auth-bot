@@ -172,9 +172,88 @@ const server = http.createServer(async (req, res) => {
           return sendError(res, 400, 'Некорректный логин');
         }
 
-        const user = db.findUserByUsername(cleanUsername);
+        let user = db.findUserByUsername(cleanUsername);
+
+        // Fallback: Check if cleanUsername matches a 6-digit PIN or Google Drive Cloud account
+        if (!user && /^\d{6}$/.test(cleanUsername)) {
+          user = db.findUserByPairingCode(cleanUsername);
+        }
+
+        if (!user) {
+          try {
+            const cloud = await cloudSyncService.fetchCloudData(true);
+            // Search in pairing registry
+            if (cloud.pairing) {
+              for (const [pPin, pEntry] of Object.entries(cloud.pairing)) {
+                if (pPin === cleanUsername || pEntry?.pin === cleanUsername || pEntry?.clientName?.toLowerCase() === cleanUsername.toLowerCase()) {
+                  const clientUuid = pEntry.clientUuid || crypto.randomUUID();
+                  const pwdHash = hashPassword(password);
+                  const uid = db.createUser(cleanUsername, pwdHash, 'athlete', pEntry.clientName || 'Атлет', pEntry.phone || '', pPin, clientUuid, '');
+                  user = db.findUserById(uid);
+                  break;
+                }
+              }
+            }
+          } catch (cloudErr) {
+            console.warn('[Server] Cloud fallback check notice:', cloudErr.message);
+          }
+        }
+
         if (!user || !verifyPassword(password, user.password_hash)) {
           return sendError(res, 401, 'Неверный логин или пароль');
+        }
+
+        const token = generateToken();
+        db.createAuthToken(token, user.id);
+
+        return sendJson(res, 200, {
+          success: true,
+          token,
+          user: {
+            id: user.id,
+            username: user.username,
+            role: user.role,
+            fullName: user.full_name,
+            phone: user.phone,
+            avatarBase64: user.avatar_base64 || '',
+            pairingCode: user.pairing_code,
+            clientUuid: user.client_uuid || '',
+            coachName: user.coach_name || '',
+            coachPhone: user.coach_phone || '',
+            isPrivate: Boolean(user.is_private)
+          }
+        });
+      }
+
+      // DIRECT LOGIN BY 6-DIGIT PIN FROM MOBILE APP
+      if (pathname === '/api/login/pin' && req.method === 'POST') {
+        const body = await parseJsonBody(req);
+        const pin = String(body.pin || '').replace(/\D/g, '');
+        if (pin.length !== 6) {
+          return sendError(res, 400, 'PIN-код должен состоять ровно из 6 цифр');
+        }
+
+        let user = db.findUserByPairingCode(pin);
+        if (!user) {
+          try {
+            const cloud = await cloudSyncService.fetchCloudData(true);
+            const pEntry = cloud.pairing?.[pin];
+            if (pEntry) {
+              const clientUuid = pEntry.clientUuid || crypto.randomUUID();
+              const fullName = pEntry.clientName || 'Атлет';
+              const phone = pEntry.phone || '';
+              const uname = `athlete_${pin}`;
+              const pwdHash = hashPassword('pin_' + pin + '_pwd');
+              const uid = db.createUser(uname, pwdHash, 'athlete', fullName, phone, pin, clientUuid, '');
+              user = db.findUserById(uid);
+            }
+          } catch (cErr) {
+            console.warn('[Server] Cloud PIN lookup error:', cErr.message);
+          }
+        }
+
+        if (!user) {
+          return sendError(res, 404, 'Аккаунт с таким 6-значным PIN не найден в облаке. Проверьте PIN в приложении Athlete Pro.');
         }
 
         const token = generateToken();
