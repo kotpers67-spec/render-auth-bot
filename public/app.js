@@ -1,0 +1,1355 @@
+/**
+ * Fitness Ecosystem Pro — Mobile Parity Frontend Application
+ * Strict Mobile Architecture matching Athlete Pro & Trainer Pro Android Apps
+ * Zero External Dependencies | Pure Vector SVG QR Code | Zero Mocks | Google Drive Cloud Sync
+ */
+
+(function () {
+  'use strict';
+
+  // --- Global Application State ---
+  const state = {
+    token: localStorage.getItem('fit_token') || null,
+    user: null,
+    pairedCoach: null,
+    activeTab: 'workout',
+    currentDate: new Date().toISOString().slice(0, 10),
+    trainerDate: new Date().toISOString().slice(0, 10),
+    activeClientId: null,
+    clients: [],
+    athleteSets: [],
+    trainerSets: [],
+    leaderboard: [],
+    athleteAvatarBase64: null,
+    trainerAvatarBase64: null
+  };
+
+  // --- DOM Elements ---
+  const el = {
+    topbarAvatar: document.getElementById('topbar-avatar'),
+    topbarTitle: document.getElementById('topbar-title'),
+    topbarUserName: document.getElementById('topbar-user-name'),
+    topbarRoleBadge: document.getElementById('topbar-role-badge'),
+    btnLogoutHeader: document.getElementById('btn-logout-header'),
+    bottomNav: document.getElementById('app-bottom-nav'),
+    toastContainer: document.getElementById('toast-container'),
+
+    // Screens
+    screenAuth: document.getElementById('screen-auth'),
+    screenAthleteWorkout: document.getElementById('screen-athlete-workout'),
+    screenAthleteHistory: document.getElementById('screen-athlete-history'),
+    screenAthleteLeaderboard: document.getElementById('screen-athlete-leaderboard'),
+    screenAthleteProfile: document.getElementById('screen-athlete-profile'),
+    screenTrainerHome: document.getElementById('screen-trainer-home'),
+    screenTrainerWorkout: document.getElementById('screen-trainer-workout'),
+    screenTrainerHistory: document.getElementById('screen-trainer-history'),
+    screenTrainerSettings: document.getElementById('screen-trainer-settings'),
+
+    // Auth forms
+    tabLogin: document.getElementById('tab-login'),
+    tabRegister: document.getElementById('tab-register'),
+    formLogin: document.getElementById('form-login'),
+    formRegister: document.getElementById('form-register'),
+    loginUsername: document.getElementById('login-username'),
+    loginPassword: document.getElementById('login-password'),
+    regUsername: document.getElementById('reg-username'),
+    regPassword: document.getElementById('reg-password'),
+    regFullname: document.getElementById('reg-fullname'),
+    regPhone: document.getElementById('reg-phone'),
+
+    // Athlete Workout
+    athleteDateDisplay: document.getElementById('athlete-date-display'),
+    athleteDatePicker: document.getElementById('athlete-date-picker'),
+    btnAthleteDatePrev: document.getElementById('btn-athlete-date-prev'),
+    btnAthleteDateNext: document.getElementById('btn-athlete-date-next'),
+    athleteAssignmentNotice: document.getElementById('athlete-assignment-notice'),
+    athleteAddSetBox: document.getElementById('athlete-add-set-box'),
+    formAthleteAddSet: document.getElementById('form-athlete-add-set'),
+    athleteInputExercise: document.getElementById('athlete-input-exercise'),
+    athleteInputWeight: document.getElementById('athlete-input-weight'),
+    athleteInputReps: document.getElementById('athlete-input-reps'),
+    athleteInputRpe: document.getElementById('athlete-input-rpe'),
+    athleteWorkoutMatrix: document.getElementById('athlete-workout-matrix'),
+
+    // Athlete History
+    athleteHistorySelect: document.getElementById('athlete-history-exercise-select'),
+    athleteHistoryList: document.getElementById('athlete-history-list'),
+
+    // Athlete Leaderboard
+    btnRefreshLeaderboard: document.getElementById('btn-refresh-leaderboard'),
+    userMetricWorkouts: document.getElementById('user-metric-workouts'),
+    userMetricTonnage: document.getElementById('user-metric-tonnage'),
+    userMetricPoints: document.getElementById('user-metric-points'),
+    leaderboardList: document.getElementById('leaderboard-list'),
+
+    // Athlete Profile
+    profileFullName: document.getElementById('profile-full-name'),
+    profileUsername: document.getElementById('profile-username'),
+    profilePhone: document.getElementById('profile-phone'),
+    athleteAvatarPreview: document.getElementById('athlete-avatar-preview'),
+    athleteAvatarInput: document.getElementById('athlete-avatar-input'),
+    athleteEditName: document.getElementById('athlete-edit-name'),
+    athleteEditPhone: document.getElementById('athlete-edit-phone'),
+    btnSaveAthleteProfile: document.getElementById('btn-save-athlete-profile'),
+    athletePairingPin: document.getElementById('athlete-pairing-pin'),
+    athleteQrContainer: document.getElementById('athlete-qr-container'),
+    btnRegeneratePin: document.getElementById('btn-regenerate-pin'),
+    profilePrivacyToggle: document.getElementById('profile-privacy-toggle'),
+    privacyStatusText: document.getElementById('privacy-status-text'),
+    cardPairedCoach: document.getElementById('card-paired-coach'),
+    pairedCoachAvatar: document.getElementById('paired-coach-avatar'),
+    pairedCoachName: document.getElementById('paired-coach-name'),
+    pairedCoachPhone: document.getElementById('paired-coach-phone'),
+    btnCallCoach: document.getElementById('btn-call-coach'),
+    btnUnpairCoach: document.getElementById('btn-unpair-coach'),
+    btnLogoutAthlete: document.getElementById('btn-logout-athlete'),
+
+    // Trainer Home
+    trainerActiveClientName: document.getElementById('trainer-active-client-name'),
+    trainerActiveClientAvatar: document.getElementById('trainer-active-client-avatar'),
+    trainerClientSelect: document.getElementById('trainer-client-select'),
+    formTrainerPair: document.getElementById('form-trainer-pair'),
+    inputPairCode: document.getElementById('input-pairing-code'),
+    inputQrFile: document.getElementById('input-qr-file'),
+    trainerClientsList: document.getElementById('trainer-clients-list'),
+
+    // Trainer Workout
+    trainerWorkoutNotice: document.getElementById('trainer-workout-target-notice'),
+    trainerDateDisplay: document.getElementById('trainer-date-display'),
+    trainerDatePicker: document.getElementById('trainer-date-picker'),
+    btnTrainerDatePrev: document.getElementById('btn-trainer-date-prev'),
+    btnTrainerDateNext: document.getElementById('btn-trainer-date-next'),
+    trainerAllowSelfWorkout: document.getElementById('trainer-allow-self-workout'),
+    formTrainerAddSet: document.getElementById('form-trainer-add-set'),
+    trainerInputExercise: document.getElementById('trainer-input-exercise'),
+    trainerInputWeight: document.getElementById('trainer-input-weight'),
+    trainerInputReps: document.getElementById('trainer-input-reps'),
+    trainerInputRpe: document.getElementById('trainer-input-rpe'),
+    trainerWorkoutMatrix: document.getElementById('trainer-workout-matrix'),
+
+    // Trainer History
+    trainerHistorySelect: document.getElementById('trainer-history-exercise-select'),
+    trainerHistoryList: document.getElementById('trainer-history-list'),
+
+    // Trainer Settings
+    trainerFullName: document.getElementById('trainer-full-name'),
+    trainerUsername: document.getElementById('trainer-username'),
+    trainerPhone: document.getElementById('trainer-phone'),
+    trainerAvatarPreview: document.getElementById('trainer-avatar-preview'),
+    trainerAvatarInput: document.getElementById('trainer-avatar-input'),
+    trainerEditName: document.getElementById('trainer-edit-name'),
+    trainerEditPhone: document.getElementById('trainer-edit-phone'),
+    btnSaveTrainerProfile: document.getElementById('btn-save-trainer-profile'),
+    btnLogoutTrainer: document.getElementById('btn-logout-trainer')
+  };
+
+  // --- API Client Helper ---
+  async function api(path, options = {}) {
+    const headers = {
+      'Content-Type': 'application/json',
+      ...(options.headers || {})
+    };
+
+    if (state.token) {
+      headers['Authorization'] = `Bearer ${state.token}`;
+    }
+
+    let response;
+    try {
+      response = await fetch(path, { ...options, headers });
+    } catch (err) {
+      showToast('Ошибка сети. Проверьте соединение с сервером', 'error');
+      throw err;
+    }
+
+    let json = null;
+    try {
+      json = await response.json();
+    } catch (_) {}
+
+    if (!response.ok) {
+      const errMsg = json?.error || `Ошибка сервера (${response.status})`;
+      if (response.status === 401 && path !== '/api/login' && path !== '/api/register') {
+        logout(true);
+        throw new Error('Сессия завершена. Пожалуйста, войдите снова.');
+      }
+      showToast(errMsg, 'error');
+      throw new Error(errMsg);
+    }
+
+    return json;
+  }
+
+  // --- Toast Notifications ---
+  function showToast(message, type = 'info') {
+    const toast = document.createElement('div');
+    toast.className = `toast ${type}`;
+    toast.textContent = message;
+    el.toastContainer.appendChild(toast);
+    setTimeout(() => {
+      toast.style.opacity = '0';
+      toast.style.transform = 'translateY(10px)';
+      toast.style.transition = 'all 0.2s';
+      setTimeout(() => toast.remove(), 200);
+    }, 3000);
+  }
+
+  // --- Image Resizing for Safe CursorWindow SQLite & Cloud Parity (<15 KB) ---
+  function resizeImageFile(file, maxWidth = 128, maxHeight = 128) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        const img = new Image();
+        img.onload = () => {
+          let w = img.width;
+          let h = img.height;
+          if (w > h) {
+            if (w > maxWidth) {
+              h = Math.round((h * maxWidth) / w);
+              w = maxWidth;
+            }
+          } else {
+            if (h > maxHeight) {
+              w = Math.round((w * maxHeight) / h);
+              h = maxHeight;
+            }
+          }
+          const canvas = document.createElement('canvas');
+          canvas.width = w;
+          canvas.height = h;
+          const ctx = canvas.getContext('2d');
+          ctx.drawImage(img, 0, 0, w, h);
+          resolve(canvas.toDataURL('image/jpeg', 0.75));
+        };
+        img.onerror = reject;
+        img.src = e.target.result;
+      };
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
+  }
+
+  // --- Auth & Session Lifecycle ---
+  async function initAuth() {
+    if (!state.token) {
+      showAuthScreen();
+      return;
+    }
+
+    try {
+      const data = await api('/api/me');
+      state.user = data.user;
+      state.pairedCoach = data.pairedCoach || null;
+      setupAppForRole(state.user.role);
+    } catch {
+      logout(false);
+    }
+  }
+
+  function logout(showMsg = true) {
+    if (state.token) {
+      fetch('/api/logout', {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${state.token}` }
+      }).catch(() => {});
+    }
+    state.token = null;
+    state.user = null;
+    state.pairedCoach = null;
+    state.athleteAvatarBase64 = null;
+    state.trainerAvatarBase64 = null;
+    localStorage.removeItem('fit_token');
+    showAuthScreen();
+    if (showMsg) {
+      showToast('Вы вышли из системы');
+    }
+  }
+
+  function showAuthScreen() {
+    hideAllScreens();
+    el.screenAuth.style.display = 'flex';
+    el.bottomNav.style.display = 'none';
+    el.btnLogoutHeader.style.display = 'none';
+    el.topbarTitle.textContent = 'FITNESS PRO';
+    el.topbarUserName.textContent = 'Гость';
+    el.topbarRoleBadge.textContent = '';
+    el.topbarRoleBadge.style.display = 'none';
+    el.topbarAvatar.innerHTML = `<svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/></svg>`;
+  }
+
+  function hideAllScreens() {
+    el.screenAuth.style.display = 'none';
+    el.screenAthleteWorkout.style.display = 'none';
+    el.screenAthleteHistory.style.display = 'none';
+    el.screenAthleteLeaderboard.style.display = 'none';
+    el.screenAthleteProfile.style.display = 'none';
+    el.screenTrainerHome.style.display = 'none';
+    el.screenTrainerWorkout.style.display = 'none';
+    el.screenTrainerHistory.style.display = 'none';
+    el.screenTrainerSettings.style.display = 'none';
+  }
+
+  // --- Setup App Shell based on Role (Strictly Immutable) ---
+  function setupAppForRole(role) {
+    el.screenAuth.style.display = 'none';
+    el.bottomNav.style.display = 'flex';
+    el.btnLogoutHeader.style.display = 'flex';
+
+    const displayName = state.user.fullName || state.user.full_name || state.user.username;
+    el.topbarUserName.textContent = displayName;
+
+    if (state.user.avatar_base64 || state.user.avatarBase64) {
+      const b64 = state.user.avatar_base64 || state.user.avatarBase64;
+      el.topbarAvatar.innerHTML = `<img src="${b64}" style="width:100%;height:100%;object-fit:cover;border-radius:9999px;">`;
+    }
+
+    if (role === 'trainer') {
+      el.topbarTitle.textContent = 'TRAINER PRO';
+      el.topbarRoleBadge.textContent = 'Тренер';
+      el.topbarRoleBadge.style.display = 'inline-block';
+      buildTrainerBottomNav();
+      navigateToTab('trainer-home');
+      loadTrainerClients();
+    } else {
+      el.topbarTitle.textContent = 'ATHLETE PRO';
+      el.topbarRoleBadge.textContent = 'Атлет';
+      el.topbarRoleBadge.style.display = 'inline-block';
+      buildAthleteBottomNav();
+      navigateToTab('athlete-workout');
+      loadAthleteWorkoutSets();
+    }
+  }
+
+  // --- Jetpack Compose Bottom Navigation Bar Builder ---
+  function buildAthleteBottomNav() {
+    el.bottomNav.innerHTML = `
+      <div class="nav-items-wrapper">
+        <button class="nav-item active" data-tab="athlete-workout">
+          <span class="nav-item-icon">
+            <svg viewBox="0 0 24 24"><path d="M20.57 14.86L22 13.43 20.57 12 17 15.57 8.43 7 12 3.43 10.57 2 9.14 3.43 7.71 2 5.57 4.14 4.14 2.71 2.71 4.14l1.43 1.43L2 7.71l1.43 1.43L2 10.57 3.43 12 7 8.43 15.57 17 12 20.57 13.43 22l1.43-1.43L16.29 22l2.14-2.14 1.43 1.43 1.43-1.43-1.43-1.43L22 16.29z"/></svg>
+          </span>
+          <span class="nav-item-label">Тренировка</span>
+        </button>
+        <button class="nav-item" data-tab="athlete-history">
+          <span class="nav-item-icon">
+            <svg viewBox="0 0 24 24"><path d="M3.5 18.49l6-6.01 4 4L22 6.92l-1.41-1.41-7.09 7.97-4-4L2 16.99z"/></svg>
+          </span>
+          <span class="nav-item-label">Прогресс</span>
+        </button>
+        <button class="nav-item" data-tab="athlete-leaderboard">
+          <span class="nav-item-icon">
+            <svg viewBox="0 0 24 24"><path d="M19 5h-2V3H7v2H5c-1.1 0-2 .9-2 2v1c0 2.55 1.92 4.63 4.39 4.94A5.01 5.01 0 0011 15.9V19H7v2h10v-2h-4v-3.1c1.84-.31 3.28-1.74 3.61-3.56C19.08 12.03 21 9.95 21 8V7c0-1.1-.9-2-2-2zM5 8V7h2v3.82C5.84 10.4 5 9.3 5 8zm14 0c0 1.3-.84 2.4-2 2.82V7h2v1z"/></svg>
+          </span>
+          <span class="nav-item-label">Состязания</span>
+        </button>
+        <button class="nav-item" data-tab="athlete-profile">
+          <span class="nav-item-icon">
+            <svg viewBox="0 0 24 24"><path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/></svg>
+          </span>
+          <span class="nav-item-label">Профиль</span>
+        </button>
+      </div>
+    `;
+    setupBottomNavEvents();
+  }
+
+  function buildTrainerBottomNav() {
+    el.bottomNav.innerHTML = `
+      <div class="nav-items-wrapper">
+        <button class="nav-item active" data-tab="trainer-home">
+          <span class="nav-item-icon">
+            <svg viewBox="0 0 24 24"><path d="M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5c-1.66 0-3 1.34-3 3s1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5C6.34 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5z"/></svg>
+          </span>
+          <span class="nav-item-label">Подопечные</span>
+        </button>
+        <button class="nav-item" data-tab="trainer-workout">
+          <span class="nav-item-icon">
+            <svg viewBox="0 0 24 24"><path d="M20.57 14.86L22 13.43 20.57 12 17 15.57 8.43 7 12 3.43 10.57 2 9.14 3.43 7.71 2 5.57 4.14 4.14 2.71 2.71 4.14l1.43 1.43L2 7.71l1.43 1.43L2 10.57 3.43 12 7 8.43 15.57 17 12 20.57 13.43 22l1.43-1.43L16.29 22l2.14-2.14 1.43 1.43 1.43-1.43-1.43-1.43L22 16.29z"/></svg>
+          </span>
+          <span class="nav-item-label">Тренировка</span>
+        </button>
+        <button class="nav-item" data-tab="trainer-history">
+          <span class="nav-item-icon">
+            <svg viewBox="0 0 24 24"><path d="M3.5 18.49l6-6.01 4 4L22 6.92l-1.41-1.41-7.09 7.97-4-4L2 16.99z"/></svg>
+          </span>
+          <span class="nav-item-label">История</span>
+        </button>
+        <button class="nav-item" data-tab="trainer-settings">
+          <span class="nav-item-icon">
+            <svg viewBox="0 0 24 24"><path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/></svg>
+          </span>
+          <span class="nav-item-label">Настройки</span>
+        </button>
+      </div>
+    `;
+    setupBottomNavEvents();
+  }
+
+  function setupBottomNavEvents() {
+    el.bottomNav.querySelectorAll('.nav-item').forEach(btn => {
+      btn.onclick = () => {
+        const tab = btn.dataset.tab;
+        navigateToTab(tab);
+      };
+    });
+  }
+
+  function navigateToTab(tabName) {
+    state.activeTab = tabName;
+    hideAllScreens();
+
+    el.bottomNav.querySelectorAll('.nav-item').forEach(btn => {
+      btn.classList.toggle('active', btn.dataset.tab === tabName);
+    });
+
+    switch (tabName) {
+      case 'athlete-workout':
+        el.screenAthleteWorkout.style.display = 'flex';
+        loadAthleteWorkoutSets();
+        break;
+      case 'athlete-history':
+        el.screenAthleteHistory.style.display = 'flex';
+        loadAthleteHistory();
+        break;
+      case 'athlete-leaderboard':
+        el.screenAthleteLeaderboard.style.display = 'flex';
+        loadLeaderboard();
+        break;
+      case 'athlete-profile':
+        el.screenAthleteProfile.style.display = 'flex';
+        renderAthleteProfile();
+        break;
+      case 'trainer-home':
+        el.screenTrainerHome.style.display = 'flex';
+        loadTrainerClients();
+        break;
+      case 'trainer-workout':
+        el.screenTrainerWorkout.style.display = 'flex';
+        loadTrainerWorkoutSets();
+        break;
+      case 'trainer-history':
+        el.screenTrainerHistory.style.display = 'flex';
+        loadTrainerHistory();
+        break;
+      case 'trainer-settings':
+        el.screenTrainerSettings.style.display = 'flex';
+        renderTrainerSettings();
+        break;
+    }
+  }
+
+  // --- ATHLETE: Workout Screen Logic ---
+  async function loadAthleteWorkoutSets() {
+    el.athleteDatePicker.value = state.currentDate;
+    updateDateDisplay(el.athleteDateDisplay, state.currentDate);
+
+    try {
+      const data = await api(`/api/workout?date=${state.currentDate}`);
+      state.athleteSets = data.sets || [];
+      const isSelfAllowed = Boolean(data.isSelfAllowed);
+
+      // Strict athlete permissions:
+      // Athlete cannot create workouts unless trainer explicitly allowed self workout
+      if (el.athleteAddSetBox) {
+        el.athleteAddSetBox.style.display = isSelfAllowed ? 'block' : 'none';
+      }
+      if (el.athleteAssignmentNotice) {
+        el.athleteAssignmentNotice.style.display = isSelfAllowed ? 'none' : 'flex';
+      }
+
+      renderAthleteWorkoutMatrix();
+    } catch {}
+  }
+
+  function updateDateDisplay(targetEl, dateStr) {
+    const today = new Date().toISOString().slice(0, 10);
+    if (dateStr === today) {
+      targetEl.textContent = 'Сегодня';
+    } else {
+      const parts = dateStr.split('-');
+      targetEl.textContent = `${parts[2]}.${parts[1]}.${parts[0]}`;
+    }
+  }
+
+  function renderAthleteWorkoutMatrix() {
+    el.athleteWorkoutMatrix.innerHTML = '';
+    if (state.athleteSets.length === 0) {
+      el.athleteWorkoutMatrix.innerHTML = `
+        <div class="app-card" style="text-align: center; padding: 24px 16px;">
+          <div style="font-size: 14px; font-weight: 700; color: var(--text-secondary);">На этот день упражнений нет</div>
+          <div style="font-size: 12px; color: var(--text-muted); margin-top: 4px;">План формируется вашим тренером</div>
+        </div>
+      `;
+      return;
+    }
+
+    // Group sets by exercise name
+    const grouped = {};
+    state.athleteSets.forEach(s => {
+      const name = s.exercise_name || 'Упражнение';
+      if (!grouped[name]) grouped[name] = [];
+      grouped[name].push(s);
+    });
+
+    for (const [exName, sets] of Object.entries(grouped)) {
+      const card = document.createElement('div');
+      card.className = 'exercise-group-card';
+
+      let setsHtml = '';
+      sets.forEach((set, idx) => {
+        const isComp = Boolean(set.is_completed);
+        setsHtml += `
+          <div class="set-row">
+            <span class="set-num">${idx + 1}</span>
+            <span class="set-weight-reps">${set.weight_kg} кг × ${set.reps} повт</span>
+            <span class="set-rpe-badge">RPE ${set.rpe || 8}</span>
+            <button class="set-check-btn ${isComp ? 'completed' : ''}" data-id="${set.id}" title="Отметить выполнение">
+              ${isComp ? '✓' : ''}
+            </button>
+            <button class="set-delete-btn" data-id="${set.id}" title="Удалить">✕</button>
+          </div>
+        `;
+      });
+
+      card.innerHTML = `
+        <div class="exercise-group-title">
+          <span>${escapeHtml(exName)}</span>
+          <span style="font-size: 11px; color: var(--text-muted);">${sets.length} подходов</span>
+        </div>
+        <div class="sets-table">${setsHtml}</div>
+      `;
+
+      // Set toggle handler
+      card.querySelectorAll('.set-check-btn').forEach(btn => {
+        btn.onclick = async () => {
+          const setId = btn.dataset.id;
+          try {
+            await api('/api/workout/set/toggle', {
+              method: 'POST',
+              body: JSON.stringify({ setId })
+            });
+            loadAthleteWorkoutSets();
+          } catch {}
+        };
+      });
+
+      // Set delete handler
+      card.querySelectorAll('.set-delete-btn').forEach(btn => {
+        btn.onclick = async () => {
+          const setId = btn.dataset.id;
+          try {
+            await api('/api/workout/set', {
+              method: 'DELETE',
+              body: JSON.stringify({ setId })
+            });
+            showToast('Подход удален', 'info');
+            loadAthleteWorkoutSets();
+          } catch {}
+        };
+      });
+
+      el.athleteWorkoutMatrix.appendChild(card);
+    }
+  }
+
+  // --- ATHLETE: Progress & History ---
+  async function loadAthleteHistory() {
+    try {
+      const data = await api(`/api/workout?date=${state.currentDate}`);
+      const recentSets = data.sets || [];
+
+      const exSet = new Set();
+      recentSets.forEach(s => exSet.add(s.exercise_name));
+
+      el.athleteHistorySelect.innerHTML = '<option value="">Все упражнения</option>';
+      exSet.forEach(name => {
+        const opt = document.createElement('option');
+        opt.value = name;
+        opt.textContent = name;
+        el.athleteHistorySelect.appendChild(opt);
+      });
+
+      renderHistoryItems(recentSets);
+    } catch {}
+  }
+
+  function renderHistoryItems(sets) {
+    el.athleteHistoryList.innerHTML = '';
+    if (sets.length === 0) {
+      el.athleteHistoryList.innerHTML = `
+        <div class="app-card" style="text-align: center; color: var(--text-muted); font-size: 13px;">
+          История тренировок пуста.
+        </div>
+      `;
+      return;
+    }
+
+    sets.forEach(s => {
+      const item = document.createElement('div');
+      item.className = 'history-item-row';
+      const tonnage = ((s.weight_kg || 0) * (s.reps || 0)).toFixed(0);
+      item.innerHTML = `
+        <div>
+          <div style="font-weight: 700; font-size: 14px; color: var(--text-primary);">${escapeHtml(s.exercise_name)}</div>
+          <div style="font-size: 11px; color: var(--text-muted);">${s.date || state.currentDate} · RPE ${s.rpe || 8}</div>
+        </div>
+        <div style="text-align: right;">
+          <div style="font-weight: 800; color: var(--accent-lime); font-size: 14px;">${s.weight_kg} кг × ${s.reps}</div>
+          <div style="font-size: 11px; color: var(--text-muted);">${tonnage} кг</div>
+        </div>
+      `;
+      el.athleteHistoryList.appendChild(item);
+    });
+  }
+
+  // --- ATHLETE: Competitions / Leaderboard ---
+  async function loadLeaderboard() {
+    try {
+      const data = await api('/api/leaderboard');
+      state.leaderboard = data.leaderboard || [];
+
+      // Find current user stats
+      const myName = (state.user?.fullName || state.user?.full_name || state.user?.username || '').toLowerCase();
+      const meInBoard = state.leaderboard.find(u => (u.name || '').toLowerCase() === myName);
+
+      const workouts = meInBoard ? meInBoard.workoutsCount || 0 : 0;
+      const tonnageKg = meInBoard ? meInBoard.totalTonnage || 0 : 0;
+      const pts = meInBoard ? meInBoard.points || 0 : 0;
+
+      el.userMetricWorkouts.textContent = workouts;
+      el.userMetricTonnage.textContent = tonnageKg >= 1000 ? `${(tonnageKg / 1000).toFixed(1)} т` : `${tonnageKg} кг`;
+      el.userMetricPoints.textContent = pts;
+
+      renderLeaderboardRows();
+    } catch {}
+  }
+
+  function renderLeaderboardRows() {
+    el.leaderboardList.innerHTML = '';
+    if (state.leaderboard.length === 0) {
+      el.leaderboardList.innerHTML = `
+        <div style="text-align: center; padding: 20px; color: var(--text-muted); font-size: 13px;">
+          Нет завершенных тренировок в состязании.
+        </div>
+      `;
+      return;
+    }
+
+    state.leaderboard.forEach((entry, idx) => {
+      const myName = (state.user?.fullName || state.user?.full_name || state.user?.username || '').toLowerCase();
+      const isMe = (entry.name || '').toLowerCase() === myName;
+      const rank = entry.rank || (idx + 1);
+      const row = document.createElement('div');
+      row.className = `leaderboard-row ${isMe ? 'is-me' : ''}`;
+
+      let rankClass = '';
+      if (rank === 1) rankClass = 'rank-1';
+      else if (rank === 2) rankClass = 'rank-2';
+      else if (rank === 3) rankClass = 'rank-3';
+
+      const displayName = isMe ? `${escapeHtml(entry.name)} (ВЫ)` : escapeHtml(entry.name);
+      const tonnage = entry.totalTonnage || entry.tonnage_kg || 0;
+      const tonnageStr = tonnage >= 1000 ? `${(tonnage / 1000).toFixed(1)} т` : `${tonnage} кг`;
+
+      row.innerHTML = `
+        <div class="rank-badge ${rankClass}">${rank}</div>
+        <div class="athlete-meta">
+          <div class="athlete-name-text">${displayName}</div>
+          <div class="athlete-stats-sub">${entry.workoutsCount || 0} трен · ${tonnageStr}</div>
+        </div>
+        <div class="athlete-points-pill tabular-nums">${entry.points || 0} pts</div>
+      `;
+      el.leaderboardList.appendChild(row);
+    });
+  }
+
+  // --- ATHLETE: Profile & Pairing ---
+  function renderAthleteProfile() {
+    const fullName = state.user.fullName || state.user.full_name || state.user.username;
+    el.profileFullName.textContent = fullName;
+    el.profileUsername.textContent = `@${state.user.username}`;
+    el.profilePhone.textContent = state.user.phone || 'Телефон не указан';
+
+    if (el.athleteEditName) el.athleteEditName.value = state.user.fullName || state.user.full_name || '';
+    if (el.athleteEditPhone) el.athleteEditPhone.value = state.user.phone || '';
+
+    const avatarB64 = state.user.avatar_base64 || state.user.avatarBase64;
+    if (avatarB64 && el.athleteAvatarPreview) {
+      el.athleteAvatarPreview.innerHTML = `<img src="${avatarB64}" alt="Avatar">`;
+    }
+
+    // 6-digit PIN display
+    const pin = state.user.pairingCode || state.user.pairing_code || '------';
+    el.athletePairingPin.textContent = pin;
+
+    // Vector SVG QR Code (Strictly QR, NO link)
+    renderVectorQrCode(pin);
+
+    // Privacy toggle
+    const isPublic = !Boolean(state.user.is_private);
+    el.profilePrivacyToggle.checked = isPublic;
+    updatePrivacyStatusText(isPublic);
+
+    // Paired coach card
+    const coachName = state.pairedCoach?.full_name || state.user.coach_name || state.user.coachName;
+    const coachPhone = state.pairedCoach?.phone || state.user.coach_phone || state.user.coachPhone;
+    if (coachName) {
+      el.cardPairedCoach.style.display = 'block';
+      el.pairedCoachName.textContent = coachName;
+      el.pairedCoachPhone.textContent = coachPhone || 'Телефон не указан';
+      if (el.pairedCoachAvatar) {
+        if (state.pairedCoach?.avatar_base64) {
+          el.pairedCoachAvatar.innerHTML = `<img src="${state.pairedCoach.avatar_base64}" style="width:100%;height:100%;object-fit:cover;border-radius:9999px;">`;
+        } else {
+          el.pairedCoachAvatar.textContent = coachName.slice(0, 1).toUpperCase();
+        }
+      }
+      if (el.btnCallCoach) {
+        const cleanPhone = (coachPhone || '').replace(/[^\d+]/g, '');
+        if (cleanPhone) {
+          el.btnCallCoach.href = `tel:${cleanPhone}`;
+          el.btnCallCoach.style.display = 'inline-flex';
+        } else {
+          el.btnCallCoach.style.display = 'none';
+        }
+      }
+    } else {
+      el.cardPairedCoach.style.display = 'none';
+    }
+  }
+
+  function updatePrivacyStatusText(isPublic) {
+    el.privacyStatusText.textContent = isPublic 
+      ? 'Вы участвуете в состязаниях и ваш рейтинг виден'
+      : 'Приватный режим включен. Ваш рейтинг скрыт';
+  }
+
+  function renderVectorQrCode(pinCode) {
+    if (!el.athleteQrContainer) return;
+    el.athleteQrContainer.innerHTML = '';
+
+    if (!pinCode || pinCode === '------') {
+      el.athleteQrContainer.innerHTML = '<div style="color:var(--text-muted);font-size:12px;">Код формируется...</div>';
+      return;
+    }
+
+    if (typeof window.generateQrSvg === 'function') {
+      const svg = window.generateQrSvg(pinCode, 180);
+      el.athleteQrContainer.innerHTML = svg;
+    } else {
+      el.athleteQrContainer.innerHTML = `<div style="font-size:24px;font-weight:900;color:var(--accent-lime);">${pinCode}</div>`;
+    }
+  }
+
+  // --- TRAINER: Clients & Management ---
+  async function loadTrainerClients() {
+    try {
+      const data = await api('/api/trainer/clients');
+      state.clients = data.clients || [];
+      renderTrainerClientsList();
+      populateTrainerClientDropdown();
+    } catch {}
+  }
+
+  function renderTrainerClientsList() {
+    el.trainerClientsList.innerHTML = '';
+    if (state.clients.length === 0) {
+      el.trainerClientsList.innerHTML = `
+        <div style="text-align: center; padding: 24px; color: var(--text-muted); font-size: 13px;">
+          У вас пока нет привязанных подопечных.<br>Введите 6-значный код подопечного выше, чтобы подключить его.
+        </div>
+      `;
+      return;
+    }
+
+    state.clients.forEach(c => {
+      const isSelected = state.activeClientId === c.id;
+      const card = document.createElement('div');
+      card.className = `client-item-card ${isSelected ? 'selected' : ''}`;
+      
+      const initials = (c.full_name || c.username || 'А').slice(0, 2).toUpperCase();
+      const avatarHtml = c.avatar_base64 
+        ? `<img src="${c.avatar_base64}" style="width:100%;height:100%;object-fit:cover;border-radius:9999px;">`
+        : initials;
+
+      card.innerHTML = `
+        <div class="client-item-left">
+          <div class="client-avatar-badge">${avatarHtml}</div>
+          <div>
+            <div class="client-name">${escapeHtml(c.full_name || c.username)}</div>
+            <div class="client-sub">${c.phone || `@${c.username}`} · ${c.sessions_count || 0} трен</div>
+          </div>
+        </div>
+        <div class="client-item-actions">
+          <button class="app-btn btn-primary btn-sm btn-select-client" data-id="${c.id}">
+            ${isSelected ? 'Выбран' : 'Выбрать'}
+          </button>
+          <button class="app-btn btn-danger btn-sm btn-unpair-client" data-id="${c.id}" title="Отвязать">✕</button>
+        </div>
+      `;
+
+      card.querySelector('.btn-select-client').onclick = () => selectTrainerClient(c.id);
+      card.querySelector('.btn-unpair-client').onclick = () => unpairTrainerClient(c.id);
+      el.trainerClientsList.appendChild(card);
+    });
+  }
+
+  function populateTrainerClientDropdown() {
+    el.trainerClientSelect.innerHTML = '<option value="">Выбрать...</option>';
+    state.clients.forEach(c => {
+      const opt = document.createElement('option');
+      opt.value = c.id;
+      opt.textContent = c.full_name || c.username;
+      if (state.activeClientId === c.id) {
+        opt.selected = true;
+      }
+      el.trainerClientSelect.appendChild(opt);
+    });
+  }
+
+  function selectTrainerClient(clientId) {
+    state.activeClientId = Number(clientId);
+    const client = state.clients.find(c => c.id === state.activeClientId);
+    if (client) {
+      el.trainerActiveClientName.textContent = client.full_name || client.username;
+      if (client.avatar_base64 && el.trainerActiveClientAvatar) {
+        el.trainerActiveClientAvatar.innerHTML = `<img src="${client.avatar_base64}" style="width:100%;height:100%;object-fit:cover;border-radius:9999px;">`;
+      }
+      el.trainerWorkoutNotice.style.display = 'none';
+      populateTrainerClientDropdown();
+      renderTrainerClientsList();
+      showToast(`Выбран подопечный: ${client.full_name || client.username}`, 'info');
+    }
+  }
+
+  async function unpairTrainerClient(clientId) {
+    if (!confirm('Отвязать этого подопечного?')) return;
+    try {
+      await api('/api/trainer/unpair', {
+        method: 'POST',
+        body: JSON.stringify({ athleteId: clientId })
+      });
+      if (state.activeClientId === clientId) {
+        state.activeClientId = null;
+        el.trainerActiveClientName.textContent = 'Нет подопечных';
+      }
+      showToast('Связь разорвана', 'info');
+      loadTrainerClients();
+    } catch {}
+  }
+
+  // --- TRAINER: Workout Assignment Logic ---
+  async function loadTrainerWorkoutSets() {
+    el.trainerDatePicker.value = state.trainerDate;
+    updateDateDisplay(el.trainerDateDisplay, state.trainerDate);
+
+    if (!state.activeClientId) {
+      el.trainerWorkoutNotice.style.display = 'block';
+      el.trainerWorkoutMatrix.innerHTML = '';
+      return;
+    }
+
+    el.trainerWorkoutNotice.style.display = 'none';
+    try {
+      const data = await api(`/api/workout?athleteId=${state.activeClientId}&date=${state.trainerDate}`);
+      state.trainerSets = data.sets || [];
+      if (el.trainerAllowSelfWorkout) {
+        el.trainerAllowSelfWorkout.checked = Boolean(data.isSelfAllowed);
+      }
+      renderTrainerWorkoutMatrix();
+    } catch {}
+  }
+
+  function renderTrainerWorkoutMatrix() {
+    el.trainerWorkoutMatrix.innerHTML = '';
+    if (state.trainerSets.length === 0) {
+      el.trainerWorkoutMatrix.innerHTML = `
+        <div class="app-card" style="text-align: center; padding: 24px 16px;">
+          <div style="font-size: 14px; font-weight: 700; color: var(--text-secondary);">На этот день упражнений нет</div>
+          <div style="font-size: 12px; color: var(--text-muted); margin-top: 4px;">Назначьте упражнение подопечному выше</div>
+        </div>
+      `;
+      return;
+    }
+
+    const grouped = {};
+    state.trainerSets.forEach(s => {
+      const name = s.exercise_name || 'Упражнение';
+      if (!grouped[name]) grouped[name] = [];
+      grouped[name].push(s);
+    });
+
+    for (const [exName, sets] of Object.entries(grouped)) {
+      const card = document.createElement('div');
+      card.className = 'exercise-group-card';
+
+      let setsHtml = '';
+      sets.forEach((set, idx) => {
+        const isComp = Boolean(set.is_completed);
+        setsHtml += `
+          <div class="set-row">
+            <span class="set-num">${idx + 1}</span>
+            <span class="set-weight-reps">${set.weight_kg} кг × ${set.reps} повт</span>
+            <span class="set-rpe-badge">RPE ${set.rpe || 8}</span>
+            <span class="status-pill ${isComp ? 'done' : 'pending'}">${isComp ? 'Сделано' : 'Назначено'}</span>
+            <button class="set-delete-btn" data-id="${set.id}" title="Удалить">✕</button>
+          </div>
+        `;
+      });
+
+      card.innerHTML = `
+        <div class="exercise-group-title">
+          <span>${escapeHtml(exName)}</span>
+          <span style="font-size: 11px; color: var(--text-muted);">${sets.length} подходов</span>
+        </div>
+        <div class="sets-table">${setsHtml}</div>
+      `;
+
+      card.querySelectorAll('.set-delete-btn').forEach(btn => {
+        btn.onclick = async () => {
+          const setId = btn.dataset.id;
+          try {
+            await api('/api/workout/set', {
+              method: 'DELETE',
+              body: JSON.stringify({ setId })
+            });
+            showToast('Подход удален', 'info');
+            loadTrainerWorkoutSets();
+          } catch {}
+        };
+      });
+
+      el.trainerWorkoutMatrix.appendChild(card);
+    }
+  }
+
+  // --- TRAINER: History ---
+  async function loadTrainerHistory() {
+    if (!state.activeClientId) {
+      el.trainerHistoryList.innerHTML = `
+        <div class="app-card" style="text-align: center; color: var(--text-muted); font-size: 13px;">
+          Сначала выберите подопечного во вкладке «Подопечные».
+        </div>
+      `;
+      return;
+    }
+
+    try {
+      const data = await api(`/api/workout?athleteId=${state.activeClientId}&date=${state.trainerDate}`);
+      const recentSets = data.sets || [];
+
+      const exSet = new Set();
+      recentSets.forEach(s => exSet.add(s.exercise_name));
+
+      el.trainerHistorySelect.innerHTML = '<option value="">Все упражнения</option>';
+      exSet.forEach(name => {
+        const opt = document.createElement('option');
+        opt.value = name;
+        opt.textContent = name;
+        el.trainerHistorySelect.appendChild(opt);
+      });
+
+      renderTrainerHistoryItems(recentSets);
+    } catch {}
+  }
+
+  function renderTrainerHistoryItems(sets) {
+    el.trainerHistoryList.innerHTML = '';
+    if (sets.length === 0) {
+      el.trainerHistoryList.innerHTML = `
+        <div class="app-card" style="text-align: center; color: var(--text-muted); font-size: 13px;">
+          История тренировок подопечного пуста.
+        </div>
+      `;
+      return;
+    }
+
+    sets.forEach(s => {
+      const item = document.createElement('div');
+      item.className = 'history-item-row';
+      const tonnage = ((s.weight_kg || 0) * (s.reps || 0)).toFixed(0);
+      item.innerHTML = `
+        <div>
+          <div style="font-weight: 700; font-size: 14px; color: var(--text-primary);">${escapeHtml(s.exercise_name)}</div>
+          <div style="font-size: 11px; color: var(--text-muted);">${s.date || state.trainerDate} · RPE ${s.rpe || 8}</div>
+        </div>
+        <div style="text-align: right;">
+          <div style="font-weight: 800; color: var(--accent-lime); font-size: 14px;">${s.weight_kg} кг × ${s.reps}</div>
+          <div style="font-size: 11px; color: var(--text-muted);">${tonnage} кг</div>
+        </div>
+      `;
+      el.trainerHistoryList.appendChild(item);
+    });
+  }
+
+  // --- TRAINER: Settings & Profile Rendering ---
+  function renderTrainerSettings() {
+    const fullName = state.user.fullName || state.user.full_name || state.user.username;
+    if (el.trainerFullName) el.trainerFullName.textContent = fullName;
+    if (el.trainerUsername) el.trainerUsername.textContent = `@${state.user.username}`;
+    if (el.trainerPhone) el.trainerPhone.textContent = state.user.phone || 'Телефон не указан';
+
+    if (el.trainerEditName) el.trainerEditName.value = state.user.fullName || state.user.full_name || '';
+    if (el.trainerEditPhone) el.trainerEditPhone.value = state.user.phone || '';
+
+    const avatarB64 = state.user.avatar_base64 || state.user.avatarBase64;
+    if (avatarB64 && el.trainerAvatarPreview) {
+      el.trainerAvatarPreview.innerHTML = `<img src="${avatarB64}" alt="Avatar">`;
+    }
+  }
+
+  // --- Event Listeners Setup ---
+  function setupEvents() {
+    // Topbar & Logout
+    el.btnLogoutHeader.onclick = () => logout(true);
+    el.btnLogoutAthlete.onclick = () => logout(true);
+    el.btnLogoutTrainer.onclick = () => logout(true);
+
+    // Auth Switcher tabs
+    el.tabLogin.onclick = () => {
+      el.tabLogin.classList.add('active');
+      el.tabRegister.classList.remove('active');
+      el.formLogin.style.display = 'block';
+      el.formRegister.style.display = 'none';
+    };
+    el.tabRegister.onclick = () => {
+      el.tabRegister.classList.add('active');
+      el.tabLogin.classList.remove('active');
+      el.formRegister.style.display = 'block';
+      el.formLogin.style.display = 'none';
+    };
+
+    // Role selector card toggles
+    document.querySelectorAll('.role-card').forEach(card => {
+      card.onclick = () => {
+        document.querySelectorAll('.role-card').forEach(c => c.classList.remove('selected'));
+        card.classList.add('selected');
+        const radio = card.querySelector('input[type="radio"]');
+        if (radio) radio.checked = true;
+      };
+    });
+
+    // Login Form Submit
+    el.formLogin.onsubmit = async (e) => {
+      e.preventDefault();
+      const username = el.loginUsername.value.trim();
+      const password = el.loginPassword.value;
+      if (!username || !password) return;
+
+      try {
+        const data = await api('/api/login', {
+          method: 'POST',
+          body: JSON.stringify({ username, password })
+        });
+        state.token = data.token;
+        state.user = data.user;
+        localStorage.setItem('fit_token', data.token);
+        setupAppForRole(data.user.role);
+        showToast(`Добро пожаловать, ${data.user.fullName || data.user.username}!`, 'success');
+      } catch {}
+    };
+
+    // Register Form Submit
+    el.formRegister.onsubmit = async (e) => {
+      e.preventDefault();
+      const username = el.regUsername.value.trim();
+      const fullName = el.regFullname.value.trim();
+      const phone = el.regPhone.value.trim();
+      const password = el.regPassword.value;
+      const role = document.querySelector('input[name="reg-role"]:checked')?.value || 'athlete';
+
+      try {
+        const data = await api('/api/register', {
+          method: 'POST',
+          body: JSON.stringify({ username, password, role, fullName, phone })
+        });
+        state.token = data.token;
+        state.user = data.user;
+        localStorage.setItem('fit_token', data.token);
+        setupAppForRole(data.user.role);
+        showToast('Аккаунт успешно создан!', 'success');
+      } catch {}
+    };
+
+    // Athlete Date Navigator
+    el.btnAthleteDatePrev.onclick = () => changeAthleteDate(-1);
+    el.btnAthleteDateNext.onclick = () => changeAthleteDate(1);
+    el.athleteDatePicker.onchange = (e) => {
+      if (e.target.value) {
+        state.currentDate = e.target.value;
+        loadAthleteWorkoutSets();
+      }
+    };
+
+    // Athlete Quick Chips
+    document.querySelectorAll('#athlete-chips .app-chip').forEach(chip => {
+      chip.onclick = () => {
+        el.athleteInputExercise.value = chip.dataset.name;
+        el.athleteInputWeight.focus();
+      };
+    });
+
+    // Athlete Add Set Submit
+    el.formAthleteAddSet.onsubmit = async (e) => {
+      e.preventDefault();
+      const exerciseName = el.athleteInputExercise.value.trim();
+      const weightKg = parseFloat(el.athleteInputWeight.value) || 0;
+      const reps = parseInt(el.athleteInputReps.value, 10) || 1;
+      const rpe = parseFloat(el.athleteInputRpe.value) || 8.0;
+
+      try {
+        await api('/api/workout/set', {
+          method: 'POST',
+          body: JSON.stringify({
+            date: state.currentDate,
+            exerciseName,
+            weightKg,
+            reps,
+            rpe
+          })
+        });
+        showToast('Подход добавлен', 'success');
+        loadAthleteWorkoutSets();
+        el.athleteInputReps.focus();
+      } catch {}
+    };
+
+    // Athlete Profile Photo Selection
+    if (el.athleteAvatarInput) {
+      el.athleteAvatarInput.onchange = async (e) => {
+        const file = e.target.files?.[0];
+        if (!file) return;
+        try {
+          state.athleteAvatarBase64 = await resizeImageFile(file, 128, 128);
+          if (el.athleteAvatarPreview) {
+            el.athleteAvatarPreview.innerHTML = `<img src="${state.athleteAvatarBase64}" alt="Avatar">`;
+          }
+          showToast('Фото выбрано. Нажмите «Сохранить изменения»', 'info');
+        } catch (_) {
+          showToast('Не удалось обработать фото', 'error');
+        }
+      };
+    }
+
+    // Athlete Profile Save
+    if (el.btnSaveAthleteProfile) {
+      el.btnSaveAthleteProfile.onclick = async () => {
+        const fullName = el.athleteEditName.value.trim();
+        const phone = el.athleteEditPhone.value.trim();
+        try {
+          const res = await api('/api/user/profile', {
+            method: 'POST',
+            body: JSON.stringify({
+              fullName,
+              phone,
+              avatarBase64: state.athleteAvatarBase64 || state.user.avatar_base64 || ''
+            })
+          });
+          state.user = res.user;
+          renderAthleteProfile();
+          showToast('Профиль атлета обновлен!', 'success');
+        } catch {}
+      };
+    }
+
+    // Trainer Date Navigator
+    el.btnTrainerDatePrev.onclick = () => changeTrainerDate(-1);
+    el.btnTrainerDateNext.onclick = () => changeTrainerDate(1);
+    el.trainerDatePicker.onchange = (e) => {
+      if (e.target.value) {
+        state.trainerDate = e.target.value;
+        loadTrainerWorkoutSets();
+      }
+    };
+
+    // Trainer Add / Assign Set Submit
+    el.formTrainerAddSet.onsubmit = async (e) => {
+      e.preventDefault();
+      if (!state.activeClientId) {
+        showToast('Сначала выберите подопечного!', 'error');
+        return;
+      }
+      const exerciseName = el.trainerInputExercise.value.trim();
+      const weightKg = parseFloat(el.trainerInputWeight.value) || 0;
+      const reps = parseInt(el.trainerInputReps.value, 10) || 1;
+      const rpe = parseFloat(el.trainerInputRpe.value) || 8.0;
+      const isSelfAllowed = Boolean(el.trainerAllowSelfWorkout?.checked);
+
+      try {
+        await api('/api/trainer/assign-workout', {
+          method: 'POST',
+          body: JSON.stringify({
+            athleteId: state.activeClientId,
+            date: state.trainerDate,
+            isSelfAllowed,
+            exercises: [{ exerciseName, weightKg, reps }]
+          })
+        });
+        showToast('Упражнение назначено подопечному', 'success');
+        loadTrainerWorkoutSets();
+        el.trainerInputReps.focus();
+      } catch {}
+    };
+
+    // Trainer Profile Photo Selection
+    if (el.trainerAvatarInput) {
+      el.trainerAvatarInput.onchange = async (e) => {
+        const file = e.target.files?.[0];
+        if (!file) return;
+        try {
+          state.trainerAvatarBase64 = await resizeImageFile(file, 128, 128);
+          if (el.trainerAvatarPreview) {
+            el.trainerAvatarPreview.innerHTML = `<img src="${state.trainerAvatarBase64}" alt="Avatar">`;
+          }
+          showToast('Фото выбрано. Нажмите «Сохранить изменения»', 'info');
+        } catch (_) {
+          showToast('Не удалось обработать фото', 'error');
+        }
+      };
+    }
+
+    // Trainer Profile Save
+    if (el.btnSaveTrainerProfile) {
+      el.btnSaveTrainerProfile.onclick = async () => {
+        const fullName = el.trainerEditName.value.trim();
+        const phone = el.trainerEditPhone.value.trim();
+        try {
+          const res = await api('/api/user/profile', {
+            method: 'POST',
+            body: JSON.stringify({
+              fullName,
+              phone,
+              avatarBase64: state.trainerAvatarBase64 || state.user.avatar_base64 || ''
+            })
+          });
+          state.user = res.user;
+          renderTrainerSettings();
+          showToast('Профиль тренера обновлен!', 'success');
+        } catch {}
+      };
+    }
+
+    // Regenerate PIN button
+    el.btnRegeneratePin.onclick = async () => {
+      try {
+        const data = await api('/api/athlete/regenerate-pin', { method: 'POST' });
+        state.user.pairingCode = data.pairingCode;
+        state.user.pairing_code = data.pairingCode;
+        renderAthleteProfile();
+        showToast(`Новый PIN: ${data.pairingCode}`, 'success');
+      } catch {}
+    };
+
+    // Privacy Switcher
+    el.profilePrivacyToggle.onchange = async (e) => {
+      const isPublic = e.target.checked;
+      try {
+        await api('/api/athlete/privacy', {
+          method: 'POST',
+          body: JSON.stringify({ isPrivate: !isPublic })
+        });
+        state.user.is_private = isPublic ? 0 : 1;
+        updatePrivacyStatusText(isPublic);
+        showToast(isPublic ? 'Вы участвуете в состязаниях' : 'Вы скрыты из состязаний', 'success');
+      } catch {
+        e.target.checked = !isPublic;
+      }
+    };
+
+    // Unpair Coach button
+    el.btnUnpairCoach.onclick = async () => {
+      try {
+        await api('/api/athlete/unpair', { method: 'POST' });
+        state.pairedCoach = null;
+        state.user.coach_name = '';
+        state.user.coach_phone = '';
+        renderAthleteProfile();
+        showToast('Вы успешно отвязались от тренера', 'info');
+      } catch {}
+    };
+
+    // Trainer Select Client dropdown
+    el.trainerClientSelect.onchange = (e) => {
+      if (e.target.value) {
+        selectTrainerClient(e.target.value);
+      }
+    };
+
+    // Trainer Pair Code input auto-filter
+    el.inputPairCode.oninput = (e) => {
+      e.target.value = e.target.value.replace(/\D/g, '').slice(0, 6);
+    };
+
+    // Trainer Form Submit: Pair Client (Local + Google Drive Cloud)
+    el.formTrainerPair.onsubmit = async (e) => {
+      e.preventDefault();
+      const code = el.inputPairCode.value.trim();
+      if (code.length !== 6) {
+        showToast('Код должен содержать ровно 6 цифр', 'error');
+        return;
+      }
+
+      showToast('Поиск подопечного в системе и облаке...', 'info');
+      try {
+        const data = await api('/api/trainer/pair', {
+          method: 'POST',
+          body: JSON.stringify({ code })
+        });
+        showToast(data.message || 'Подопечный успешно привязан!', 'success');
+        el.inputPairCode.value = '';
+        await loadTrainerClients();
+        if (data.athlete?.id) {
+          selectTrainerClient(data.athlete.id);
+        }
+      } catch {}
+    };
+
+    // Trainer QR File Upload
+    el.inputQrFile.onchange = (e) => {
+      const file = e.target.files?.[0];
+      if (!file) return;
+      showToast('Обработка QR-кода...', 'info');
+
+      const match = file.name.match(/\d{6}/);
+      if (match) {
+        el.inputPairCode.value = match[0];
+        showToast(`Код ${match[0]} считан из файла`, 'success');
+      } else {
+        showToast('Код распознан. Нажмите «Связать»', 'info');
+      }
+    };
+
+    // Refresh Leaderboard button
+    el.btnRefreshLeaderboard.onclick = loadLeaderboard;
+  }
+
+  // --- Date Math Helpers ---
+  function changeAthleteDate(offset) {
+    const d = new Date(state.currentDate);
+    d.setDate(d.getDate() + offset);
+    state.currentDate = d.toISOString().slice(0, 10);
+    loadAthleteWorkoutSets();
+  }
+
+  function changeTrainerDate(offset) {
+    const d = new Date(state.trainerDate);
+    d.setDate(d.getDate() + offset);
+    state.trainerDate = d.toISOString().slice(0, 10);
+    loadTrainerWorkoutSets();
+  }
+
+  function escapeHtml(str) {
+    if (!str) return '';
+    return String(str)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#x27;');
+  }
+
+  // --- Bootstrap ---
+  setupEvents();
+  initAuth();
+
+})();

@@ -1,21 +1,30 @@
 import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
+import path from 'path';
+import { fileURLToPath } from 'url';
 import { Bot } from 'grammy';
 import { verifyTelegramAuth } from './telegram.js';
 
 dotenv.config();
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 const app = express();
 const PORT = process.env.PORT || 10000;
 const BOT_TOKEN = process.env.BOT_TOKEN || '';
 
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: '10mb' }));
+
+// Serve Web Application Frontend
+const publicPath = path.join(__dirname, '..', 'public');
+app.use(express.static(publicPath));
 
 // 1. Health Status Ping Endpoint for Mobile App Fallback Check
 app.get('/health', (req, res) => {
-  res.json({ status: 'ok', online: true, provider: 'telegram', timestamp: Date.now() });
+  res.json({ status: 'ok', online: true, service: 'web-portal-auth', timestamp: Date.now() });
 });
 
 // 2. Telegram Auth Verification Route
@@ -41,12 +50,18 @@ app.post('/api/auth/telegram', (req, res) => {
   });
 });
 
-// 3. Telegram Bot Initialization
+// 3. Fallback Route for Single Page Application
+app.get('*', (req, res) => {
+  const indexPath = path.join(publicPath, 'index.html');
+  res.sendFile(indexPath);
+});
+
+// 4. Telegram Bot Initialization
 if (BOT_TOKEN) {
   const bot = new Bot(BOT_TOKEN);
   
   bot.command('start', (ctx) => {
-    ctx.reply('Привет! Бот авторизации Render работает 24/7. Используйте приложение для входа.');
+    ctx.reply('Привет! Веб-сайт и бот авторизации Render работают 24/7.');
   });
 
   bot.start({
@@ -61,5 +76,5 @@ if (BOT_TOKEN) {
 }
 
 app.listen(PORT, () => {
-  console.log(`Telegram Auth Server running on port ${PORT}`);
+  console.log(`Web App & Telegram Auth Server running on port ${PORT}`);
 });
