@@ -1,11 +1,12 @@
 {
-  "name": "render-auth-bot",
+  "name": "fitness-ecosystem-web",
   "version": "1.0.0",
-  "description": "Fitness Ecosystem Pro Web Portal & Telegram Bot for Render.com with Google Drive Sync",
+  "description": "Fitness Ecosystem Pro Web Portal - Athlete & Trainer Dashboards with Zero-Trust Security, Hardened Auth, and Anti-Injection Protection",
   "main": "src/server.js",
   "scripts": {
     "start": "node src/server.js",
-    "build": "echo 'Build OK'"
+    "test": "node --test tests/security.test.js tests/pin_2fa.test.js",
+    "test:security": "node --test tests/security.test.js"
   },
   "dependencies": {
     "grammy": "^1.28.0"
