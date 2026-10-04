@@ -1622,27 +1622,30 @@
       el.formLogin.style.display = 'none';
     };
 
-    // Role selector card toggles
-    document.querySelectorAll('.role-card').forEach(card => {
-      card.onclick = () => {
-        document.querySelectorAll('.role-card').forEach(c => c.classList.remove('selected'));
-        card.classList.add('selected');
-        const radio = card.querySelector('input[type="radio"]');
-        if (radio) radio.checked = true;
-      };
+    // Role selector card toggles (scope within their form / group)
+    document.querySelectorAll('.role-selector-cards').forEach(container => {
+      container.querySelectorAll('.role-card').forEach(card => {
+        card.onclick = () => {
+          container.querySelectorAll('.role-card').forEach(c => c.classList.remove('selected'));
+          card.classList.add('selected');
+          const radio = card.querySelector('input[type="radio"]');
+          if (radio) radio.checked = true;
+        };
+      });
     });
 
-    // Login Form Submit (with 2FA support)
+    // Login Form Submit (with role and 2FA support)
     el.formLogin.onsubmit = async (e) => {
       e.preventDefault();
       const username = el.loginUsername.value.trim();
       const password = el.loginPassword.value;
+      const role = document.querySelector('input[name="login-role"]:checked')?.value || 'athlete';
       if (!username || !password) return;
 
       try {
         const data = await api('/api/login', {
           method: 'POST',
-          body: JSON.stringify({ username, password })
+          body: JSON.stringify({ username, password, role })
         });
 
         if (data.require2FA) {
@@ -1993,6 +1996,14 @@
             el.dialogTelegramAuth?.close();
             setupAppForRole(res.user.role);
             showToast(`Вход выполнен в 1 клик: ${res.user.fullName || res.user.username}!`, 'success');
+          } else if (res.status === 'REQUIRES_2FA' && res.userId) {
+            clearInterval(state.tgSessionPollInterval);
+            state.tgSessionPollInterval = null;
+            resetTgAuthModal();
+            el.dialogTelegramAuth?.close();
+            state.pending2FAUserId = res.userId;
+            open2FALoginModal(res.expiresInSeconds || 300);
+            showToast(res.message || 'Включена 2FA: введите 6-значный код из Telegram', 'info');
           } else if (res.status === 'EXPIRED') {
             clearInterval(state.tgSessionPollInterval);
             state.tgSessionPollInterval = null;

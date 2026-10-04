@@ -19,8 +19,9 @@ const OWNER_LINKS = {
  */
 function createMainMenuKeyboard() {
   return new Keyboard()
-    .text('🔑 Код входа').text('🔗 Привязать аккаунт').row()
-    .text('💬 Связь с владельцами').text('❓ Справка')
+    .text('🔑 Код входа').text('🔄 Сменить роль').row()
+    .text('🔗 Привязать аккаунт').text('💬 Связь с владельцами').row()
+    .text('❓ Справка')
     .resized();
 }
 
@@ -267,6 +268,43 @@ function setupBotHandlers(bot, { db, telegramOtpStore, telegramSessionStore, use
           db.linkTelegram(user.id, tgId, username || '');
           user = db.findUserById(user.id);
         }
+      }
+
+      // Security check: 2FA Enforcement
+      // If 2FA is enabled on the account, 1-Click login MUST NOT bypass 2FA!
+      if (user.two_factor_enabled === 1) {
+        if (telegramOtpStore) {
+          telegramOtpStore.delete(`2fa_${user.id}`);
+        }
+        const otp = generateSecurePin();
+        const expiresAt = Date.now() + 5 * 60 * 1000;
+        if (telegramOtpStore) {
+          telegramOtpStore.set(`2fa_${user.id}`, {
+            userId: user.id,
+            code: otp,
+            expiresAt,
+            attempts: 0
+          });
+        }
+
+        session.status = 'REQUIRES_2FA';
+        session.userId = user.id;
+        session.expiresInSeconds = 300;
+
+        await ctx.reply(
+          `🛡️ <b>Внимание: Для вашего аккаунта включена 2FA аутентификация!</b>\n\n` +
+          `Вход в 1 клик заблокирован политикой безопасности.\n` +
+          `Ваш 6-значный одноразовый код для подтверждения входа:\n\n` +
+          `👉 <code>${otp}</code> 👈\n` +
+          `<i>(нажмите на код, чтобы скопировать)</i>\n\n` +
+          `⏱ Действует: <b>5 минут</b>.\n` +
+          `Введите этот код в окне браузера или приложения для завершения авторизации.`,
+          {
+            parse_mode: 'HTML',
+            reply_markup: createOwnersKeyboard()
+          }
+        );
+        return;
       }
 
       const token = generateToken();
