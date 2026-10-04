@@ -1375,6 +1375,127 @@ const server = http.createServer(async (req, res) => {
         return sendJson(res, 201, { success: true, id, history });
       }
 
+      // BI-DIRECTIONAL CLOUD SYNC (Google Drive / МойДиск)
+      if (pathname === '/api/sync' && req.method === 'POST') {
+        const result = { success: true, timestamp: Date.now(), syncedItems: [] };
+        try {
+          if (user.role === 'athlete') {
+            // 1. Ensure athlete pairing & avatar are up-to-date in cloud
+            if (user.pairing_code) {
+              await cloudSyncService.registerAthletePairing(
+                user.pairing_code,
+                user.client_uuid,
+                user.full_name,
+                user.phone,
+                '',
+                user.avatar_base64 || ''
+              );
+              result.syncedItems.push('pairing_info');
+            }
+
+            // 2. Check if a coach paired this athlete in the cloud
+            const pairingStatus = await cloudSyncService.checkAthletePairingStatus(user.pairing_code, user.client_uuid);
+            if (pairingStatus && pairingStatus.status === 'PAIRED' && pairingStatus.coachName) {
+              db.updateCoachInfo(user.id, pairingStatus.coachName, pairingStatus.coachPhone || '');
+              user.coach_name = pairingStatus.coachName;
+              user.coach_phone = pairingStatus.coachPhone || '';
+              result.syncedItems.push('coach_pairing');
+            }
+
+            // 3. Pull assigned workouts from cloud and update local SQLite
+            if (user.client_uuid) {
+              const cloudWorkouts = await cloudSyncService.getAthleteCloudWorkouts(user.client_uuid);
+              if (Array.isArray(cloudWorkouts)) {
+                for (const cw of cloudWorkouts) {
+                  if (!cw.date) continue;
+                  const { session, sets } = db.getWorkoutSessionWithSets(user.id, cw.date);
+                  const sessionId = session ? session.id : db.assignTrainerWorkout(
+                    session?.assigned_by_trainer_id || 1,
+                    user.id,
+                    cw.date,
+                    cw.isSelfWorkoutAllowed ? 1 : 0,
+                    cw.notes || ''
+                  );
+
+                  if (Array.isArray(cw.exercises)) {
+                    for (const ex of cw.exercises) {
+                      const exName = escapeHtml(ex.name || 'Упражнение');
+                      if (Array.isArray(ex.sets)) {
+                        for (const s of ex.sets) {
+                          const weight = Number(s.actualWeightKg || s.targetWeightKg || s.weight || 0);
+                          const reps = Number(s.actualReps || s.targetReps || s.reps || 1);
+                          const isCompleted = Boolean(s.isCompleted);
+                          const rpe = Number(s.rpe || 8.0);
+
+                          const existingSet = sets.find(ls => ls.exercise_name === exName && ls.reps === reps && Math.abs(ls.weight_kg - weight) < 0.01);
+                          if (existingSet) {
+                            if (isCompleted && !existingSet.is_completed) {
+                              db.toggleWorkoutSet(existingSet.id, true);
+                            }
+                          } else {
+                            const newSetId = db.addWorkoutSet(sessionId, exName, weight, reps, rpe, 0);
+                            if (isCompleted) {
+                              db.toggleWorkoutSet(newSetId, true);
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+                result.syncedItems.push('assigned_workouts');
+              }
+            }
+          } else if (user.role === 'trainer') {
+            // For trainer: iterate over clients, check cloud updates for their workouts and avatars
+            const clients = db.getTrainerClients(user.id);
+            const cloudData = await cloudSyncService.fetchCloudData(true);
+
+            if (cloudData.clients && typeof cloudData.clients === 'object') {
+              for (const c of clients) {
+                if (!c.client_uuid) continue;
+                const cloudClient = cloudData.clients[c.client_uuid];
+                if (cloudClient) {
+                  // Sync avatar if missing locally
+                  if (cloudClient.avatarBase64 && (!c.avatar_base64 || c.avatar_base64 !== cloudClient.avatarBase64)) {
+                    db.updateProfile(c.id, c.full_name, c.phone, cloudClient.avatarBase64);
+                    result.syncedItems.push(`avatar_${c.id}`);
+                  }
+                  // Pull any workout session completions done on mobile
+                  if (Array.isArray(cloudClient.assignedWorkouts)) {
+                    for (const cw of cloudClient.assignedWorkouts) {
+                      if (!cw.date) continue;
+                      const { session, sets } = db.getWorkoutSessionWithSets(c.id, cw.date);
+                      if (session && Array.isArray(cw.exercises)) {
+                        for (const ex of cw.exercises) {
+                          const exName = escapeHtml(ex.name || 'Упражнение');
+                          if (Array.isArray(ex.sets)) {
+                            for (const s of ex.sets) {
+                              if (s.isCompleted) {
+                                const matched = sets.find(ls => ls.exercise_name === exName && !ls.is_completed);
+                                if (matched) {
+                                  db.toggleWorkoutSet(matched.id, true);
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+            result.syncedItems.push('trainer_clients_cloud');
+          }
+
+          return sendJson(res, 200, result);
+        } catch (err) {
+          console.error('[Server] Manual Cloud Sync error:', err);
+          return sendError(res, 500, `Ошибка синхронизации с Google Drive: ${err.message}`);
+        }
+      }
+
       return sendError(res, 404, 'API endpoint not found');
     }
 

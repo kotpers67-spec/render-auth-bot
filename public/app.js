@@ -61,6 +61,11 @@
     topbarTitle: document.getElementById('topbar-title'),
     topbarUserName: document.getElementById('topbar-user-name'),
     topbarRoleBadge: document.getElementById('topbar-role-badge'),
+    btnSyncHeader: document.getElementById('btn-sync-header'),
+    btnSyncAthlete: document.getElementById('btn-sync-athlete'),
+    btnSyncTrainer: document.getElementById('btn-sync-trainer'),
+    athleteSyncStatusText: document.getElementById('athlete-sync-status-text'),
+    trainerSyncStatusText: document.getElementById('trainer-sync-status-text'),
     btnLogoutHeader: document.getElementById('btn-logout-header'),
     bottomNav: document.getElementById('app-bottom-nav'),
     toastContainer: document.getElementById('toast-container'),
@@ -377,6 +382,7 @@
     el.screenAuth.style.display = 'flex';
     el.bottomNav.style.display = 'none';
     el.btnLogoutHeader.style.display = 'none';
+    if (el.btnSyncHeader) el.btnSyncHeader.style.display = 'none';
     el.topbarTitle.textContent = 'FITNESS PRO';
     el.topbarUserName.textContent = 'Гость';
     el.topbarRoleBadge.textContent = '';
@@ -401,6 +407,7 @@
     el.screenAuth.style.display = 'none';
     el.bottomNav.style.display = 'flex';
     el.btnLogoutHeader.style.display = 'flex';
+    if (el.btnSyncHeader) el.btnSyncHeader.style.display = 'inline-flex';
 
     const displayName = state.user.fullName || state.user.full_name || state.user.username;
     el.topbarUserName.textContent = displayName;
@@ -1206,7 +1213,7 @@
       : 'Приватный режим включен. Ваш рейтинг скрыт';
   }
 
-  function renderVectorQrCode(pinCode) {
+  async function renderVectorQrCode(pinCode) {
     if (!el.athleteQrContainer) return;
     el.athleteQrContainer.innerHTML = '';
 
@@ -1216,11 +1223,23 @@
     }
 
     if (typeof window.generateQrSvg === 'function') {
-      const svg = window.generateQrSvg(pinCode, { size: 200, color: '#000000', background: '#ffffff', margin: 2 });
-      el.athleteQrContainer.innerHTML = svg;
-    } else {
-      el.athleteQrContainer.innerHTML = `<div style="font-size:24px;font-weight:900;color:var(--accent-lime);">${pinCode}</div>`;
+      const svg = window.generateQrSvg(pinCode, { size: 200, color: '#000000', background: '#ffffff', margin: 4 });
+      if (svg) {
+        el.athleteQrContainer.innerHTML = svg;
+        return;
+      }
     }
+
+    try {
+      const res = await fetch(`/api/qr-svg?text=${encodeURIComponent(pinCode)}`);
+      if (res.ok) {
+        const svg = await res.text();
+        el.athleteQrContainer.innerHTML = svg;
+        return;
+      }
+    } catch (_) {}
+
+    el.athleteQrContainer.innerHTML = `<div style="font-size:24px;font-weight:900;color:var(--accent-lime);">${pinCode}</div>`;
   }
 
   // --- TRAINER: Clients & Management ---
@@ -1931,7 +1950,7 @@
 
           const botHint = document.getElementById('tg-bot-link-hint');
           if (botHint) {
-            const bName = res.botUsername || 'fitness_ecosystem_bot';
+            const bName = res.botUsername || 'fitnessecosystemBOT';
             botHint.innerHTML = `<a href="https://t.me/${bName}?start=login" target="_blank" class="app-btn btn-secondary" style="text-decoration:none;display:flex;align-items:center;justify-content:center;gap:6px;font-size:13px;padding:9px 12px;background:#2AABEE;color:#fff;border-radius:10px;font-weight:600;margin-top:6px;"><span>🤖</span><span>Открыть бота @${bName} для получения кода</span></a>`;
             botHint.style.display = 'block';
           }
@@ -2457,6 +2476,46 @@
       if (el.pwaInstallBanner) el.pwaInstallBanner.style.display = 'none';
       showToast('Приложение Fitness Pro успешно установлено!', 'success');
     });
+
+    // Bi-Directional Cloud Sync Handler (Google Drive / МойДиск)
+    let isSyncing = false;
+    async function triggerCloudSync() {
+      if (isSyncing) return;
+      isSyncing = true;
+      document.querySelectorAll('.sync-icon').forEach(icon => icon.classList.add('spinning'));
+      showToast('Синхронизация с МойДиск (Google Drive)...', 'info');
+
+      try {
+        const res = await api('/api/sync', { method: 'POST' });
+        const timeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        const statusMsg = `Синхронизировано в ${timeStr}`;
+
+        if (el.athleteSyncStatusText) el.athleteSyncStatusText.textContent = statusMsg;
+        if (el.trainerSyncStatusText) el.trainerSyncStatusText.textContent = statusMsg;
+
+        showToast('Данные успешно синхронизированы с Google Drive!', 'success');
+
+        // Refresh currently active views with fresh data
+        if (state.user?.role === 'athlete') {
+          await loadAthleteWorkoutSets();
+          await renderAthleteProfile();
+        } else if (state.user?.role === 'trainer') {
+          await loadTrainerClients();
+          if (state.activeClientId) {
+            await loadTrainerWorkoutSets();
+          }
+        }
+      } catch (err) {
+        showToast(err.message || 'Ошибка синхронизации с облаком', 'error');
+      } finally {
+        isSyncing = false;
+        document.querySelectorAll('.sync-icon').forEach(icon => icon.classList.remove('spinning'));
+      }
+    }
+
+    if (el.btnSyncHeader) el.btnSyncHeader.onclick = triggerCloudSync;
+    if (el.btnSyncAthlete) el.btnSyncAthlete.onclick = triggerCloudSync;
+    if (el.btnSyncTrainer) el.btnSyncTrainer.onclick = triggerCloudSync;
 
     // Register Service Worker for PWA
     if ('serviceWorker' in navigator) {

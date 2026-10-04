@@ -31,6 +31,13 @@
         </div>
       </div>
       <div class="topbar-right" id="topbar-actions">
+        <button type="button" id="btn-sync-header" class="icon-btn" title="Синхронизировать с МойДиск" style="display: none; align-items: center; justify-content: center; background: rgba(59, 130, 246, 0.15); color: #60a5fa; border-radius: 20px; padding: 4px 10px; font-size: 11px; font-weight: 800; gap: 4px; border: 1px solid rgba(59, 130, 246, 0.3); cursor: pointer;">
+          <span class="sync-icon">🔄</span>
+          <span>Синхронизация</span>
+        </button>
+        <button type="button" class="btn-open-download-modal icon-btn" title="Скачать APK" style="display: inline-flex; align-items: center; justify-content: center; background: rgba(200, 255, 0, 0.15); color: var(--accent-lime); border-radius: 20px; padding: 4px 10px; font-size: 11px; font-weight: 800; gap: 4px; border: 1px solid var(--border-lime); cursor: pointer;">
+          <span>📱 APK</span>
+        </button>
         <span class="role-badge" id="topbar-role-badge"></span>
         <button id="btn-logout-header" class="icon-btn" title="Выйти" style="display: none;">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
@@ -50,6 +57,11 @@
           <h1 class="auth-title">FITNESS ECOSYSTEM</h1>
           <p class="auth-subtitle">Экосистема для атлетов и персональных тренеров</p>
         </div>
+
+        <!-- Android APK Download Shortcut Button -->
+        <button type="button" class="btn-open-download-modal app-btn btn-secondary" style="margin-bottom: 12px; width: 100%; border: 1px solid var(--border-lime);">
+          ⚡ Скачать Android APK приложения
+        </button>
 
         <div class="auth-card">
           <!-- Fast Telegram Authentication -->
@@ -446,6 +458,20 @@
           </div>
         </div>
 
+        <!-- Cloud Sync Card (МойДиск / Google Drive) -->
+        <div class="app-card" id="card-cloud-sync-athlete">
+          <div class="card-title">ОБЛАЧНАЯ СИНХРОНИЗАЦИЯ (МОЙДИСК)</div>
+          <p class="card-desc">Синхронизация профиля, аватара, плана тренировок и связки с тренером через Google Drive.</p>
+          <div class="status-badge-row" style="margin-bottom: 12px;">
+            <span class="status-indicator-dot online"></span>
+            <span class="status-text" id="athlete-sync-status-text">Готово к синхронизации</span>
+          </div>
+          <button type="button" id="btn-sync-athlete" class="app-btn btn-secondary" style="width: 100%; display: flex; align-items: center; justify-content: center; gap: 8px;">
+            <span class="sync-icon">🔄</span>
+            <span>Синхронизировать сейчас</span>
+          </button>
+        </div>
+
         <!-- Paired Coach Card -->
         <div class="app-card" id="card-paired-coach" style="display: none;">
           <div class="card-title">ВАШ ТРЕНЕР</div>
@@ -759,12 +785,17 @@
         </div>
 
         <!-- Ecosystem Status Card -->
-        <div class="app-card">
-          <div class="card-title">СИНХРОНИЗАЦИЯ И СТАТУС</div>
-          <div class="status-badge-row">
+        <div class="app-card" id="card-cloud-sync-trainer">
+          <div class="card-title">СИНХРОНИЗАЦИЯ (МОЙДИСК / GOOGLE DRIVE)</div>
+          <p class="card-desc">Двусторонняя синхронизация подопечных, назначенных тренировок и аватарок с Google Drive.</p>
+          <div class="status-badge-row" style="margin-bottom: 12px;">
             <span class="status-indicator-dot online"></span>
-            <span class="status-text">Синхронизация с облаком и смартфонами активна</span>
+            <span class="status-text" id="trainer-sync-status-text">Синхронизация с облаком и смартфонами активна</span>
           </div>
+          <button type="button" id="btn-sync-trainer" class="app-btn btn-secondary" style="width: 100%; display: flex; align-items: center; justify-content: center; gap: 8px;">
+            <span class="sync-icon">🔄</span>
+            <span>Синхронизировать сейчас</span>
+          </button>
         </div>
 
         <!-- Telegram & 2FA Security Card -->
@@ -987,12 +1018,12 @@
             <div class="download-apk-card">
               <div class="apk-card-header">
                 <span class="apk-badge">АТЛЕТ</span>
-                <span class="apk-version">v1.0.6 (Latest)</span>
+                <span class="apk-version">v1.0.8 (Latest)</span>
               </div>
               <h4 class="apk-title">Athlete Pro для Android</h4>
               <p class="apk-desc">Дневник тренировок, замеры веса, QR/PIN привязка к тренеру и таблица рекордов.</p>
-              <a href="https://github.com/kotpers67-spec/fitness-ecosystem-pro/releases/download/v1.0.6/athlete-pro-v1.0.6.apk" class="app-btn btn-primary" download style="display: flex; align-items: center; justify-content: center; gap: 8px; text-decoration: none;">
-                <span>⬇ Скачать Athlete Pro APK</span>
+              <a href="https://github.com/kotpers67-spec/fitness-ecosystem-pro/releases/download/v1.0.8/athlete-pro-v1.0.8.apk" class="app-btn btn-primary" download style="display: flex; align-items: center; justify-content: center; gap: 8px; text-decoration: none;">
+                <span>⬇ Скачать Athlete Pro APK (v1.0.8)</span>
               </a>
             </div>
 
@@ -1000,12 +1031,12 @@
             <div class="download-apk-card" style="margin-top: 12px;">
               <div class="apk-card-header">
                 <span class="apk-badge" style="background: rgba(16, 185, 129, 0.2); color: var(--accent-emerald);">ТРЕНЕР</span>
-                <span class="apk-version">v1.0.6 (Latest)</span>
+                <span class="apk-version">v1.0.8 (Latest)</span>
               </div>
               <h4 class="apk-title">Trainer Pro для Android</h4>
               <p class="apk-desc">Управление подопечными, назначение программ тренировок, сканер QR и Google Drive синхронизация.</p>
-              <a href="https://github.com/kotpers67-spec/fitness-ecosystem-pro/releases/download/v1.0.6/trainer-pro-v1.0.6.apk" class="app-btn btn-secondary" download style="display: flex; align-items: center; justify-content: center; gap: 8px; text-decoration: none;">
-                <span>⬇ Скачать Trainer Pro APK</span>
+              <a href="https://github.com/kotpers67-spec/fitness-ecosystem-pro/releases/download/v1.0.8/trainer-pro-v1.0.8.apk" class="app-btn btn-secondary" download style="display: flex; align-items: center; justify-content: center; gap: 8px; text-decoration: none;">
+                <span>⬇ Скачать Trainer Pro APK (v1.0.8)</span>
               </a>
             </div>
 
@@ -1040,6 +1071,7 @@
     <div id="toast-container" class="toast-container"></div>
   </div>
 
+  <script src="/qrcode.min.js"></script>
   <script src="/qr.js"></script>
   <script src="/app.js"></script>
 </body>
