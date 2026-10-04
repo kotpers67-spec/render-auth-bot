@@ -61,10 +61,9 @@
             </div>
           </div>
 
-          <!-- Switcher tabs: Вход / PIN / Регистрация -->
+          <!-- Switcher tabs: Вход / Регистрация -->
           <div class="auth-tab-row">
             <button id="tab-login" class="auth-tab active">Вход</button>
-            <button id="tab-pin" class="auth-tab">По PIN</button>
             <button id="tab-register" class="auth-tab">Регистрация</button>
           </div>
 
@@ -72,25 +71,13 @@
           <form id="form-login">
             <div class="form-group">
               <label for="login-username" class="field-label">Логин</label>
-              <input type="text" id="login-username" class="app-input" placeholder="Введите логин или 6-значный PIN" autocomplete="username" required>
+              <input type="text" id="login-username" class="app-input" placeholder="Введите логин (латиница или кириллица)" autocomplete="username" required>
             </div>
             <div class="form-group">
               <label for="login-password" class="field-label">Пароль</label>
               <input type="password" id="login-password" class="app-input" placeholder="Введите пароль" autocomplete="current-password" required>
             </div>
             <button type="submit" class="app-btn btn-primary" id="btn-submit-login">Войти в аккаунт</button>
-          </form>
-
-          <!-- Form: PIN Login (From Mobile App) -->
-          <form id="form-pin" style="display: none;">
-            <div class="form-group">
-              <label for="login-pin-code" class="field-label">6-значный PIN из Athlete Pro</label>
-              <input type="text" id="login-pin-code" class="app-input" placeholder="Например: 123456" maxlength="6" inputmode="numeric" required>
-            </div>
-            <p style="font-size: 11px; color: var(--text-secondary); margin-bottom: 12px; line-height: 1.4;">
-              Введите PIN-код из приложения на телефоне — сайт мгновенно подтянет ваш профиль и тренировки из Google Диска.
-            </p>
-            <button type="submit" class="app-btn btn-primary" id="btn-submit-pin">Синхронизировать и войти</button>
           </form>
 
           <!-- Form: Register -->
@@ -128,6 +115,19 @@
             </div>
             <button type="submit" class="app-btn btn-primary" id="btn-submit-register">Создать аккаунт</button>
           </form>
+
+          <!-- Support & Owners Contact -->
+          <div class="auth-owners-box">
+            <span class="auth-owners-title">СВЯЗЬ С ВЛАДЕЛЬЦАМИ</span>
+            <div class="owners-links-row">
+              <a href="https://t.me/SantiLA213" target="_blank" rel="noopener noreferrer" class="owner-chip">
+                <span>💬 @SantiLA213</span>
+              </a>
+              <a href="https://t.me/Spirit5449" target="_blank" rel="noopener noreferrer" class="owner-chip">
+                <span>💬 @Spirit5449</span>
+              </a>
+            </div>
+          </div>
         </div>
       </section>
 
@@ -290,7 +290,10 @@
           <div class="pin-display-box">
             <span class="pin-label">КОД ПОДКЛЮЧЕНИЯ (6 ЦИФР)</span>
             <span class="pin-code-large tabular-nums" id="athlete-pairing-pin">------</span>
-            <span class="pin-instruction">Вводится тренером слитно, без дефиса</span>
+            <div class="pin-timer-badge" id="pin-timer-badge">
+              ⏱ Действует: <span id="pin-countdown-text">05:00</span>
+            </div>
+            <span class="pin-instruction">Вводится тренером слитно, без дефиса. Меняется каждые 5 минут.</span>
           </div>
 
           <!-- Clean QR Code Display -->
@@ -303,6 +306,30 @@
           <button id="btn-regenerate-pin" class="app-btn btn-secondary">
             ↻ Сгенерировать новый код
           </button>
+        </div>
+
+        <!-- Telegram & 2FA Security Card -->
+        <div class="app-card">
+          <div class="card-title">TELEGRAM И БЕЗОПАСНОСТЬ (2FA)</div>
+          <div class="tg-link-status-row">
+            <span class="tg-status-label">Telegram аккаунт:</span>
+            <span class="tg-status-val" id="athlete-tg-status">Не привязан</span>
+          </div>
+          <div id="athlete-tg-action-box" style="margin-top: 6px;">
+            <button type="button" id="btn-link-tg-athlete" class="app-btn btn-telegram">
+              ✈ Привязать Telegram
+            </button>
+          </div>
+          <div class="privacy-row" style="margin-top: 14px; padding-top: 10px; border-top: 1px solid var(--border-subtle);">
+            <div>
+              <div class="privacy-title">2FA АУТЕНТИФИКАЦИЯ</div>
+              <div class="privacy-desc">Все входы требуют 6-значный код из Telegram бота</div>
+            </div>
+            <label class="switch-toggle">
+              <input type="checkbox" id="athlete-2fa-toggle">
+              <span class="slider"></span>
+            </label>
+          </div>
         </div>
 
         <!-- Privacy Switcher -->
@@ -335,6 +362,20 @@
           <button id="btn-unpair-coach" class="app-btn btn-danger" style="margin-top: 8px;">
             Отвязаться от тренера
           </button>
+        </div>
+
+        <!-- Owners Contact Card -->
+        <div class="app-card">
+          <div class="card-title">СВЯЗЬ С ВЛАДЕЛЬЦАМИ</div>
+          <p class="card-desc">Вопросы по экосистеме или предложения по развитию:</p>
+          <div class="owners-links-row" style="margin-top: 4px;">
+            <a href="https://t.me/SantiLA213" target="_blank" rel="noopener noreferrer" class="owner-chip">
+              <span>💬 @SantiLA213</span>
+            </a>
+            <a href="https://t.me/Spirit5449" target="_blank" rel="noopener noreferrer" class="owner-chip">
+              <span>💬 @Spirit5449</span>
+            </a>
+          </div>
         </div>
 
         <!-- Logout Button -->
@@ -523,46 +564,175 @@
           </div>
         </div>
 
+        <!-- Telegram & 2FA Security Card -->
+        <div class="app-card">
+          <div class="card-title">TELEGRAM И БЕЗОПАСНОСТЬ (2FA)</div>
+          <div class="tg-link-status-row">
+            <span class="tg-status-label">Telegram аккаунт:</span>
+            <span class="tg-status-val" id="trainer-tg-status">Не привязан</span>
+          </div>
+          <div id="trainer-tg-action-box" style="margin-top: 6px;">
+            <button type="button" id="btn-link-tg-trainer" class="app-btn btn-telegram">
+              ✈ Привязать Telegram
+            </button>
+          </div>
+          <div class="privacy-row" style="margin-top: 14px; padding-top: 10px; border-top: 1px solid var(--border-subtle);">
+            <div>
+              <div class="privacy-title">2FA АУТЕНТИФИКАЦИЯ</div>
+              <div class="privacy-desc">Все входы требуют 6-значный код из Telegram бота</div>
+            </div>
+            <label class="switch-toggle">
+              <input type="checkbox" id="trainer-2fa-toggle">
+              <span class="slider"></span>
+            </label>
+          </div>
+        </div>
+
+        <!-- Owners Contact Card -->
+        <div class="app-card">
+          <div class="card-title">СВЯЗЬ С ВЛАДЕЛЬЦАМИ</div>
+          <p class="card-desc">Вопросы по экосистеме или предложения по развитию:</p>
+          <div class="owners-links-row" style="margin-top: 4px;">
+            <a href="https://t.me/SantiLA213" target="_blank" rel="noopener noreferrer" class="owner-chip">
+              <span>💬 @SantiLA213</span>
+            </a>
+            <a href="https://t.me/Spirit5449" target="_blank" rel="noopener noreferrer" class="owner-chip">
+              <span>💬 @Spirit5449</span>
+            </a>
+          </div>
+        </div>
+
         <button id="btn-logout-trainer" class="app-btn btn-danger" style="margin-top: 8px;">
           Выйти из аккаунта
         </button>
       </section>
 
-      <!-- Dialog: Telegram Auth Modal (Universal Modal Overlay) -->
-      <div id="dialog-telegram-auth" class="app-modal-overlay hidden">
-        <div class="app-dialog">
-          <div class="dialog-title">ВХОД ЧЕРЕЗ TELEGRAM</div>
-          <p class="dialog-subtitle">Мгновенный вход в экосистему через Telegram</p>
+      <!-- Dialog: Telegram OTP Auth Modal (5-minute one-time code + profile completion) -->
+      <dialog id="dialog-telegram-auth" class="app-dialog">
+        <div class="dialog-content">
           
-          <form id="form-telegram-auth">
-            <div class="form-group" style="margin-bottom: 12px;">
-              <label class="field-label">Ваш Telegram @username или ID</label>
-              <input type="text" id="tg-input-username" class="app-input" placeholder="@username или имя" required>
-            </div>
-
-            <div class="form-group" style="margin-bottom: 16px;">
-              <label class="field-label">Ваша роль в экосистеме</label>
-              <div class="role-selector-cards">
-                <label class="role-card selected">
-                  <input type="radio" name="tg-reg-role" value="athlete" checked>
-                  <div class="role-card-title">АТЛЕТ</div>
-                  <div class="role-card-desc">Тренировки, отметка подходов, рейтинг</div>
-                </label>
-                <label class="role-card">
-                  <input type="radio" name="tg-reg-role" value="trainer">
-                  <div class="role-card-title">ТРЕНЕР</div>
-                  <div class="role-card-desc">Ведение подопечных, назначение планов</div>
-                </label>
+          <!-- STEP 1: Request Code -->
+          <div id="tg-step-request">
+            <div class="dialog-title">ВХОД ЧЕРЕЗ TELEGRAM</div>
+            <p class="dialog-subtitle">Введите ваш Telegram @username. В бота придёт одноразовый 6-значный код (действует 5 минут).</p>
+            <form id="form-tg-request">
+              <div class="form-group" style="margin-bottom: 16px;">
+                <label class="field-label">Ваш Telegram @username</label>
+                <input type="text" id="tg-input-username" class="app-input" placeholder="@durov или логин" required autocomplete="username">
               </div>
-            </div>
+              <div class="dialog-actions">
+                <button type="button" class="app-btn btn-secondary btn-close-tg">Отмена</button>
+                <button type="submit" class="app-btn btn-telegram" id="btn-submit-tg-request">Получить код в Telegram</button>
+              </div>
+            </form>
+          </div>
 
+          <!-- STEP 2: Verify OTP Code -->
+          <div id="tg-step-verify" style="display: none;">
+            <div class="dialog-title">ОДНОРАЗОВЫЙ КОД</div>
+            <p class="dialog-subtitle">В Telegram бота отправлен 6-значный код. Он действует 5 минут.</p>
+            <div class="tg-timer-badge" id="tg-timer-display">⏱ Действует: 05:00</div>
+            <div id="tg-bot-link-hint" style="margin: 10px 0; display: none;"></div>
+            <form id="form-tg-verify">
+              <div class="form-group" style="margin-bottom: 16px;">
+                <label class="field-label">6-значный код из Telegram</label>
+                <input type="text" id="tg-input-code" class="app-input pin-input-field tabular-nums" placeholder="123456" maxlength="6" inputmode="numeric" required autocomplete="one-time-code">
+              </div>
+              <div class="dialog-actions">
+                <button type="button" id="btn-tg-back-to-step1" class="app-btn btn-secondary">Назад</button>
+                <button type="submit" class="app-btn btn-telegram" id="btn-submit-tg-verify">Подтвердить код</button>
+              </div>
+            </form>
+          </div>
+
+          <!-- STEP 3: Complete Profile (As in Mobile App) -->
+          <div id="tg-step-profile" style="display: none;">
+            <div class="dialog-title">ЗАПОЛНИТЕ ПРОФИЛЬ</div>
+            <p class="dialog-subtitle">Первый вход через Telegram: укажите ваши данные (как в приложении).</p>
+            <form id="form-tg-profile">
+              <div class="form-group" style="margin-bottom: 10px;">
+                <label class="field-label">ФИО</label>
+                <input type="text" id="tg-profile-name" class="app-input" placeholder="Иван Иванов" required>
+              </div>
+              <div class="form-group" style="margin-bottom: 12px;">
+                <label class="field-label">Номер телефона</label>
+                <input type="tel" id="tg-profile-phone" class="app-input" placeholder="+7 999 000-00-00">
+              </div>
+              <div class="form-group" style="margin-bottom: 16px;">
+                <label class="field-label">Ваша роль (нельзя изменить позже)</label>
+                <div class="role-selector-cards">
+                  <label class="role-card selected">
+                    <input type="radio" name="tg-new-role" value="athlete" checked>
+                    <div class="role-card-title">АТЛЕТ</div>
+                    <div class="role-card-desc">Тренировки по плану, отметка подходов, рейтинг</div>
+                  </label>
+                  <label class="role-card">
+                    <input type="radio" name="tg-new-role" value="trainer">
+                    <div class="role-card-title">ТРЕНЕР</div>
+                    <div class="role-card-desc">Ведение подопечных, назначение планов</div>
+                  </label>
+                </div>
+              </div>
+              <button type="submit" class="app-btn btn-primary" id="btn-submit-tg-profile">Войти в аккаунт</button>
+            </form>
+          </div>
+
+        </div>
+      </dialog>
+
+      <!-- Dialog: 2FA Login Verification Modal -->
+      <dialog id="dialog-2fa-verify" class="app-dialog">
+        <div class="dialog-content">
+          <div class="dialog-title">ПОДТВЕРЖДЕНИЕ 2FA</div>
+          <p class="dialog-subtitle">На ваш привязанный Telegram отправлен одноразовый 6-значный код (действует 5 минут).</p>
+          <div class="tg-timer-badge" id="login-2fa-timer-display">⏱ Действует: 05:00</div>
+          <form id="form-login-2fa">
+            <div class="form-group" style="margin-bottom: 16px;">
+              <label class="field-label">6-значный код из Telegram</label>
+              <input type="text" id="login-2fa-input-code" class="app-input pin-input-field tabular-nums" placeholder="123456" maxlength="6" inputmode="numeric" required autocomplete="one-time-code">
+            </div>
             <div class="dialog-actions">
-              <button type="button" id="btn-cancel-tg-dialog" class="app-btn btn-secondary">Отмена</button>
-              <button type="submit" class="app-btn btn-telegram">Войти</button>
+              <button type="button" class="app-btn btn-secondary btn-close-2fa">Отмена</button>
+              <button type="submit" class="app-btn btn-primary" id="btn-submit-login-2fa">Подтвердить вход</button>
             </div>
           </form>
         </div>
-      </div>
+      </dialog>
+
+      <!-- Dialog: Link Telegram to Existing Account Modal -->
+      <dialog id="dialog-link-telegram" class="app-dialog">
+        <div class="dialog-content">
+          <div class="dialog-title">ПРИВЯЗКА TELEGRAM</div>
+          <p class="dialog-subtitle">Введите ваш Telegram @username. Мы отправим проверочный код в бота для привязки аккаунта.</p>
+          
+          <div id="link-step-1">
+            <form id="form-link-tg-request">
+              <div class="form-group" style="margin-bottom: 16px;">
+                <label class="field-label">Ваш Telegram @username</label>
+                <input type="text" id="link-tg-input-username" class="app-input" placeholder="@username" required>
+              </div>
+              <div class="dialog-actions">
+                <button type="button" class="app-btn btn-secondary btn-close-link-tg">Отмена</button>
+                <button type="submit" class="app-btn btn-telegram" id="btn-submit-link-tg-req">Запросить код</button>
+              </div>
+            </form>
+          </div>
+
+          <div id="link-step-2" style="display: none;">
+            <div class="tg-timer-badge" id="link-tg-timer-display">⏱ Действует: 05:00</div>
+            <form id="form-link-tg-confirm">
+              <div class="form-group" style="margin-bottom: 16px;">
+                <label class="field-label">6-значный код из Telegram бота</label>
+                <input type="text" id="link-tg-input-code" class="app-input pin-input-field tabular-nums" placeholder="123456" maxlength="6" inputmode="numeric" required>
+              </div>
+              <div class="dialog-actions">
+                <button type="button" id="btn-link-tg-back" class="app-btn btn-secondary">Назад</button>
+                <button type="submit" class="app-btn btn-primary" id="btn-submit-link-tg-confirm">Привязать</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      </dialog>
 
     </main>
 

@@ -52,12 +52,63 @@ app.get('*', (req, res) => {
   res.sendFile(indexPath);
 });
 
+// In-Memory store for 5-minute dynamic Telegram OTP codes
+interface OtpRecord {
+  code: string;
+  expiresAt: number;
+}
+const botOtpStore = new Map<string, OtpRecord>();
+
 // 4. Telegram Bot Initialization
 if (BOT_TOKEN) {
   const bot = new Bot(BOT_TOKEN);
   
   bot.command('start', (ctx) => {
-    ctx.reply('Привет! Веб-сайт и бот авторизации Render работают 24/7.');
+    const welcomeText = 
+      `🏋️ *Fitness Ecosystem Pro*\n` +
+      `Официальный сервис авторизации и синхронизации.\n\n` +
+      `Доступные команды:\n` +
+      `🔑 /code — Получить одноразовый 6-значный код входа (действует 5 минут)\n` +
+      `🔗 /link — Инструкция по привязке аккаунта\n` +
+      `👥 /owners — Связаться с создателями проекта\n\n` +
+      `Каждый код действует строго 300 секунд. Старые коды мгновенно аннулируются.`;
+    ctx.reply(welcomeText, { parse_mode: 'Markdown' });
+  });
+
+  bot.command('code', (ctx) => {
+    const username = (ctx.from?.username || String(ctx.from?.id)).toLowerCase();
+    const code = String(Math.floor(100000 + Math.random() * 900000));
+    const expiresAt = Date.now() + 5 * 60 * 1000;
+
+    botOtpStore.set(username, { code, expiresAt });
+
+    const msg = 
+      `🔐 *Ваш одноразовый 6-значный код:*\n\n` +
+      `\`${code}\`\n\n` +
+      `⏱ Код действует строго *5 минут* (300 сек).\n` +
+      `Все предыдущие коды стали недействительными. Никому не сообщайте его.`;
+    ctx.reply(msg, { parse_mode: 'Markdown' });
+  });
+
+  bot.command('owners', (ctx) => {
+    const msg = 
+      `👥 *Создатели и владельцы Fitness Ecosystem Pro:*\n\n` +
+      `• [@SantiLA213](https://t.me/SantiLA213)\n` +
+      `• [@Spirit5449](https://t.me/Spirit5449)\n\n` +
+      `Напишите по любым вопросам, техническим предложениям и сотрудничеству.`;
+    ctx.reply(msg, { parse_mode: 'Markdown', link_preview_options: { is_disabled: false } });
+  });
+
+  bot.command('link', (ctx) => {
+    const username = ctx.from?.username ? `@${ctx.from.username}` : 'Ваш аккаунт';
+    const msg = 
+      `🔗 *Привязка аккаунта к Telegram:*\n\n` +
+      `1. Войдите в свой профиль на сайте или в мобильном приложении.\n` +
+      `2. В блоке «TELEGRAM И БЕЗОПАСНОСТЬ» нажмите кнопку *Привязать Telegram*.\n` +
+      `3. Укажите ваш логин: ${username}\n` +
+      `4. Введите 6-значный код из команды /code для подтверждения.\n` +
+      `После привязки вы сможете активировать 2FA защиту для всех входов!`;
+    ctx.reply(msg, { parse_mode: 'Markdown' });
   });
 
   bot.start({

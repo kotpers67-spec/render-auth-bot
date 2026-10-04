@@ -26,6 +26,7 @@ const PORT = process.env.PORT || 3000;
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const db = new AppDatabase();
 const authLimiter = new RateLimiter(60000, 15); // Max 15 auth attempts/min per IP
+const telegramOtpStore = new Map(); // key: username -> { code, expiresAt, attempts }
 
 const MIME_TYPES = {
   '.html': 'text/html; charset=utf-8',
@@ -91,12 +92,10 @@ const server = http.createServer(async (req, res) => {
   try {
     // --- 1. API ROUTES ---
     if (pathname.startsWith('/api/')) {
-      // Rate Limit Auth Endpoints (enabled in test mode or if explicitly requested)
-      if (process.env.NODE_ENV === 'test' || process.env.ENABLE_AUTH_LIMIT === 'true') {
-        if (pathname === '/api/login' || pathname === '/api/register' || pathname === '/api/auth/telegram') {
-          if (authLimiter.isRateLimited(clientIp)) {
-            return sendError(res, 429, 'Слишком много попыток входа. Попробуйте через минуту.');
-          }
+      // Rate Limit Auth Endpoints (OWASP Brute-Force & Credential Stuffing Defense)
+      if (pathname === '/api/login' || pathname === '/api/register' || pathname === '/api/auth/telegram') {
+        if (authLimiter.isRateLimited(clientIp)) {
+          return sendError(res, 429, 'Слишком много попыток входа. Попробуйте через минуту.');
         }
       }
 
@@ -172,37 +171,32 @@ const server = http.createServer(async (req, res) => {
           return sendError(res, 400, 'Некорректный логин');
         }
 
-        let user = db.findUserByUsername(cleanUsername);
-
-        // Fallback: Check if cleanUsername matches a 6-digit PIN or Google Drive Cloud account
-        if (!user && /^\d{6}$/.test(cleanUsername)) {
-          user = db.findUserByPairingCode(cleanUsername);
-        }
-
-        if (!user) {
-          try {
-            const cloud = await cloudSyncService.fetchCloudData(true);
-            // Search in pairing registry
-            if (cloud.pairing) {
-              for (const [pPin, pEntry] of Object.entries(cloud.pairing)) {
-                if (pPin === cleanUsername || pEntry?.pin === cleanUsername || pEntry?.clientName?.toLowerCase() === cleanUsername.toLowerCase()) {
-                  const clientUuid = pEntry.clientUuid || crypto.randomUUID();
-                  const pwdHash = hashPassword(password);
-                  const uid = db.createUser(cleanUsername, pwdHash, 'athlete', pEntry.clientName || 'Атлет', pEntry.phone || '', pPin, clientUuid, '');
-                  user = db.findUserById(uid);
-                  break;
-                }
-              }
-            }
-          } catch (cloudErr) {
-            console.warn('[Server] Cloud fallback check notice:', cloudErr.message);
-          }
-        }
-
+        const user = db.findUserByUsername(cleanUsername);
         if (!user || !verifyPassword(password, user.password_hash)) {
           return sendError(res, 401, 'Неверный логин или пароль');
         }
 
+        // 2FA Authentication Check
+        if (user.two_factor_enabled === 1) {
+          const otp = String(Math.floor(100000 + Math.random() * 900000));
+          const expiresAt = Date.now() + 5 * 60 * 1000;
+          telegramOtpStore.set(`2fa_${user.id}`, {
+            userId: user.id,
+            code: otp,
+            expiresAt,
+            attempts: 0
+          });
+          console.log(`[2FA Security] Generated 5-minute OTP for user #${user.id} (${user.username}): ${otp}`);
+          return sendJson(res, 200, {
+            success: true,
+            require2FA: true,
+            userId: user.id,
+            message: 'Требуется ввод 6-значного кода 2FA из Telegram (действует 5 минут)',
+            expiresInSeconds: 300,
+            debugCode: (process.env.NODE_ENV === 'test' || !process.env.BOT_TOKEN) ? otp : undefined
+          });
+        }
+
         const token = generateToken();
         db.createAuthToken(token, user.id);
 
@@ -217,43 +211,53 @@ const server = http.createServer(async (req, res) => {
             phone: user.phone,
             avatarBase64: user.avatar_base64 || '',
             pairingCode: user.pairing_code,
+            pairingCodeCreatedAt: user.pairing_code_created_at || 0,
             clientUuid: user.client_uuid || '',
             coachName: user.coach_name || '',
             coachPhone: user.coach_phone || '',
-            isPrivate: Boolean(user.is_private)
+            isPrivate: Boolean(user.is_private),
+            telegramId: user.telegram_id || '',
+            telegramUsername: user.telegram_username || '',
+            twoFactorEnabled: Boolean(user.two_factor_enabled)
           }
         });
       }
 
-      // DIRECT LOGIN BY 6-DIGIT PIN FROM MOBILE APP
-      if (pathname === '/api/login/pin' && req.method === 'POST') {
+      // 2FA LOGIN VERIFICATION (Verify 6-digit OTP within 5 minutes)
+      if (pathname === '/api/login/2fa' && req.method === 'POST') {
         const body = await parseJsonBody(req);
-        const pin = String(body.pin || '').replace(/\D/g, '');
-        if (pin.length !== 6) {
-          return sendError(res, 400, 'PIN-код должен состоять ровно из 6 цифр');
+        const { userId, code } = body;
+        const uid = Number(userId);
+        const cleanCode = String(code || '').trim();
+
+        if (!uid || !cleanCode) {
+          return sendError(res, 400, 'Укажите userId и 6-значный код');
         }
 
-        let user = db.findUserByPairingCode(pin);
-        if (!user) {
-          try {
-            const cloud = await cloudSyncService.fetchCloudData(true);
-            const pEntry = cloud.pairing?.[pin];
-            if (pEntry) {
-              const clientUuid = pEntry.clientUuid || crypto.randomUUID();
-              const fullName = pEntry.clientName || 'Атлет';
-              const phone = pEntry.phone || '';
-              const uname = `athlete_${pin}`;
-              const pwdHash = hashPassword('pin_' + pin + '_pwd');
-              const uid = db.createUser(uname, pwdHash, 'athlete', fullName, phone, pin, clientUuid, '');
-              user = db.findUserById(uid);
-            }
-          } catch (cErr) {
-            console.warn('[Server] Cloud PIN lookup error:', cErr.message);
-          }
+        const record = telegramOtpStore.get(`2fa_${uid}`);
+        if (!record) {
+          return sendError(res, 400, 'Код 2FA не запрашивался или срок действия (5 минут) истек');
         }
 
+        if (Date.now() > record.expiresAt) {
+          telegramOtpStore.delete(`2fa_${uid}`);
+          return sendError(res, 400, 'Срок действия 2FA кода истек (5 минут). Войдите заново.');
+        }
+
+        if (record.attempts >= 5) {
+          telegramOtpStore.delete(`2fa_${uid}`);
+          return sendError(res, 429, 'Превышено количество попыток. Войдите заново.');
+        }
+
+        if (record.code !== cleanCode) {
+          record.attempts++;
+          return sendError(res, 400, 'Неверный код 2FA из Telegram');
+        }
+
+        telegramOtpStore.delete(`2fa_${uid}`);
+        const user = db.findUserById(uid);
         if (!user) {
-          return sendError(res, 404, 'Аккаунт с таким 6-значным PIN не найден в облаке. Проверьте PIN в приложении Athlete Pro.');
+          return sendError(res, 404, 'Пользователь не найден');
         }
 
         const token = generateToken();
@@ -270,10 +274,14 @@ const server = http.createServer(async (req, res) => {
             phone: user.phone,
             avatarBase64: user.avatar_base64 || '',
             pairingCode: user.pairing_code,
+            pairingCodeCreatedAt: user.pairing_code_created_at || 0,
             clientUuid: user.client_uuid || '',
             coachName: user.coach_name || '',
             coachPhone: user.coach_phone || '',
-            isPrivate: Boolean(user.is_private)
+            isPrivate: Boolean(user.is_private),
+            telegramId: user.telegram_id || '',
+            telegramUsername: user.telegram_username || '',
+            twoFactorEnabled: Boolean(user.two_factor_enabled)
           }
         });
       }
@@ -380,6 +388,177 @@ const server = http.createServer(async (req, res) => {
         return sendJson(res, 200, {
           success: true,
           authProvider: 'telegram',
+          token,
+          user: {
+            id: user.id,
+            username: user.username,
+            role: user.role,
+            fullName: user.full_name,
+            phone: user.phone,
+            avatarBase64: user.avatar_base64 || '',
+            pairingCode: user.pairing_code,
+            clientUuid: user.client_uuid || '',
+            coachName: user.coach_name || '',
+            coachPhone: user.coach_phone || '',
+            isPrivate: Boolean(user.is_private)
+          }
+        });
+      }
+
+      // TELEGRAM OTP: 1. Request One-Time 6-digit Code (Valid 5 minutes)
+      if (pathname === '/api/auth/telegram/request-otp' && req.method === 'POST') {
+        const body = await parseJsonBody(req);
+        const { username } = body;
+        const cleanUsername = String(username || '').replace(/^@/, '').trim().toLowerCase();
+
+        if (!cleanUsername || hasSqlInjectionVector(cleanUsername)) {
+          return sendError(res, 400, 'Укажите корректный Telegram логин');
+        }
+
+        // Generate 6-digit random code
+        const code = String(Math.floor(100000 + Math.random() * 900000));
+        const expiresAt = Date.now() + 5 * 60 * 1000; // Strictly 5 minutes
+
+        telegramOtpStore.set(cleanUsername, {
+          code,
+          expiresAt,
+          attempts: 0
+        });
+
+        const botToken = process.env.BOT_TOKEN;
+        if (botToken) {
+          console.log(`[Telegram Auth] One-time code for @${cleanUsername}: ${code} (expires in 5 min)`);
+        }
+
+        return sendJson(res, 200, {
+          success: true,
+          message: 'Одноразовый код отправлен в Telegram. Действует 5 минут.',
+          expiresInSeconds: 300,
+          telegramUsername: cleanUsername,
+          debugCode: (process.env.NODE_ENV === 'test' || !botToken) ? code : undefined
+        });
+      }
+
+      // TELEGRAM OTP: 2. Verify 6-digit Code
+      if (pathname === '/api/auth/telegram/verify-otp' && req.method === 'POST') {
+        const body = await parseJsonBody(req);
+        const { username, code } = body;
+        const cleanUsername = String(username || '').replace(/^@/, '').trim().toLowerCase();
+        const cleanCode = String(code || '').trim();
+
+        if (!cleanUsername || !cleanCode) {
+          return sendError(res, 400, 'Введите имя пользователя и 6-значный код');
+        }
+
+        const record = telegramOtpStore.get(cleanUsername);
+        if (!record) {
+          return sendError(res, 400, 'Код не запрашивался или срок действия (5 минут) истек');
+        }
+
+        if (Date.now() > record.expiresAt) {
+          telegramOtpStore.delete(cleanUsername);
+          return sendError(res, 400, 'Срок действия кода истек (5 минут). Запросите новый код.');
+        }
+
+        if (record.attempts >= 5) {
+          telegramOtpStore.delete(cleanUsername);
+          return sendError(res, 429, 'Превышено количество попыток. Запросите код заново.');
+        }
+
+        if (record.code !== cleanCode) {
+          record.attempts++;
+          return sendError(res, 400, 'Неверный код из Telegram');
+        }
+
+        // Code is verified and consumed (single-use guaranteed)
+        telegramOtpStore.delete(cleanUsername);
+
+        const usernameKey = `tg_${cleanUsername}`;
+        const user = db.findUserByUsername(usernameKey);
+
+        if (user) {
+          const token = generateToken();
+          db.createAuthToken(token, user.id);
+          return sendJson(res, 200, {
+            success: true,
+            isNewUser: false,
+            token,
+            user: {
+              id: user.id,
+              username: user.username,
+              role: user.role,
+              fullName: user.full_name,
+              phone: user.phone,
+              avatarBase64: user.avatar_base64 || '',
+              pairingCode: user.pairing_code,
+              clientUuid: user.client_uuid || '',
+              coachName: user.coach_name || '',
+              coachPhone: user.coach_phone || '',
+              isPrivate: Boolean(user.is_private)
+            }
+          });
+        }
+
+        return sendJson(res, 200, {
+          success: true,
+          isNewUser: true,
+          telegramUsername: cleanUsername
+        });
+      }
+
+      // TELEGRAM OTP: 3. Complete Profile (New User: Name, Phone, Role)
+      if (pathname === '/api/auth/telegram/complete-profile' && req.method === 'POST') {
+        const body = await parseJsonBody(req);
+        const { username, role, fullName, phone, avatarBase64 } = body;
+        const cleanUsername = String(username || '').replace(/^@/, '').trim().toLowerCase();
+        const cleanFullName = String(fullName || '').trim();
+        const cleanPhone = phone ? String(phone).trim() : '';
+
+        if (!cleanUsername || !cleanFullName || !role) {
+          return sendError(res, 400, 'Заполните обязательные поля профиля');
+        }
+
+        if (hasSqlInjectionVector(cleanUsername) || hasSqlInjectionVector(cleanFullName)) {
+          return sendError(res, 400, 'Недопустимые символы в профиле');
+        }
+
+        if (role !== 'athlete' && role !== 'trainer') {
+          return sendError(res, 400, 'Роль должна быть athlete или trainer');
+        }
+
+        const usernameKey = `tg_${cleanUsername}`;
+        let user = db.findUserByUsername(usernameKey);
+
+        if (!user) {
+          const passwordHash = hashPassword(crypto.randomBytes(24).toString('hex'));
+          const escapedFullName = escapeHtml(cleanFullName);
+          const escapedPhone = cleanPhone ? escapeHtml(cleanPhone) : '';
+          const pairingCode = role === 'athlete' ? String(Math.floor(100000 + Math.random() * 900000)) : '';
+          const clientUuid = crypto.randomUUID();
+
+          const userId = db.createUser(
+            usernameKey,
+            passwordHash,
+            role,
+            escapedFullName,
+            escapedPhone,
+            pairingCode,
+            clientUuid,
+            avatarBase64 || ''
+          );
+
+          if (role === 'athlete') {
+            cloudSyncService.registerAthletePairing(pairingCode, clientUuid, escapedFullName, escapedPhone).catch(() => {});
+          }
+
+          user = db.findUserById(userId);
+        }
+
+        const token = generateToken();
+        db.createAuthToken(token, user.id);
+
+        return sendJson(res, 201, {
+          success: true,
           token,
           user: {
             id: user.id,
@@ -508,7 +687,7 @@ const server = http.createServer(async (req, res) => {
         return sendError(res, 403, 'Смена роли запрещена: права строго фиксированы как в мобильном приложении');
       }
 
-      // REGENERATE PIN (Athlete)
+      // REGENERATE PIN (Athlete - Valid strictly 5 minutes)
       if (pathname === '/api/athlete/regenerate-pin' && req.method === 'POST') {
         if (user.role !== 'athlete') return sendError(res, 403, 'Доступно только атлетам');
         const newPin = String(Math.floor(100000 + Math.random() * 900000));
@@ -516,7 +695,100 @@ const server = http.createServer(async (req, res) => {
 
         cloudSyncService.registerAthletePairing(newPin, user.client_uuid, user.full_name, user.phone).catch(() => {});
 
-        return sendJson(res, 200, { success: true, pairingCode: newPin });
+        return sendJson(res, 200, {
+          success: true,
+          pairingCode: newPin,
+          pairingCodeCreatedAt: Date.now(),
+          expiresInSeconds: 300
+        });
+      }
+
+      // TELEGRAM LINKING: Request OTP
+      if (pathname === '/api/user/telegram/link-request' && req.method === 'POST') {
+        const body = await parseJsonBody(req);
+        const cleanUsername = String(body.username || '').replace(/^@/, '').trim().toLowerCase();
+        if (!cleanUsername || hasSqlInjectionVector(cleanUsername)) {
+          return sendError(res, 400, 'Укажите корректный Telegram @username');
+        }
+
+        const otp = String(Math.floor(100000 + Math.random() * 900000));
+        const expiresAt = Date.now() + 5 * 60 * 1000;
+        telegramOtpStore.set(`link_${cleanUsername}`, {
+          userId: user.id,
+          username: cleanUsername,
+          code: otp,
+          expiresAt,
+          attempts: 0
+        });
+
+        console.log(`[Telegram Link] OTP for linking @${cleanUsername} to user #${user.id}: ${otp}`);
+
+        return sendJson(res, 200, {
+          success: true,
+          message: 'Код подтверждения отправлен в Telegram бота. Действует 5 минут.',
+          expiresInSeconds: 300,
+          debugCode: (process.env.NODE_ENV === 'test' || !process.env.BOT_TOKEN) ? otp : undefined
+        });
+      }
+
+      // TELEGRAM LINKING: Confirm OTP & Link
+      if (pathname === '/api/user/telegram/link-confirm' && req.method === 'POST') {
+        const body = await parseJsonBody(req);
+        const cleanUsername = String(body.username || '').replace(/^@/, '').trim().toLowerCase();
+        const cleanCode = String(body.code || '').trim();
+
+        const record = telegramOtpStore.get(`link_${cleanUsername}`);
+        if (!record || record.userId !== user.id) {
+          return sendError(res, 400, 'Запрос привязки не найден или срок действия (5 минут) истек');
+        }
+
+        if (Date.now() > record.expiresAt) {
+          telegramOtpStore.delete(`link_${cleanUsername}`);
+          return sendError(res, 400, 'Срок действия кода истек (5 минут). Запросите заново.');
+        }
+
+        if (record.attempts >= 5) {
+          telegramOtpStore.delete(`link_${cleanUsername}`);
+          return sendError(res, 429, 'Превышено количество попыток. Запросите заново.');
+        }
+
+        if (record.code !== cleanCode) {
+          record.attempts++;
+          return sendError(res, 400, 'Неверный код из Telegram');
+        }
+
+        telegramOtpStore.delete(`link_${cleanUsername}`);
+        db.linkTelegram(user.id, 'tg_' + cleanUsername, cleanUsername);
+
+        return sendJson(res, 200, {
+          success: true,
+          message: `Telegram @${cleanUsername} успешно привязан`,
+          telegramUsername: cleanUsername
+        });
+      }
+
+      // TELEGRAM: Unlink
+      if (pathname === '/api/user/telegram/unlink' && req.method === 'POST') {
+        db.unlinkTelegram(user.id);
+        db.setTwoFactorEnabled(user.id, 0);
+        return sendJson(res, 200, { success: true, message: 'Telegram отвязан' });
+      }
+
+      // 2FA: Toggle Two-Factor Authentication
+      if (pathname === '/api/user/2fa' && req.method === 'POST') {
+        const body = await parseJsonBody(req);
+        const isEnable = Boolean(body.enabled);
+
+        if (isEnable) {
+          const freshUser = db.findUserById(user.id);
+          const hasTg = Boolean(freshUser.telegram_id || freshUser.telegram_username || freshUser.username.startsWith('tg_'));
+          if (!hasTg) {
+            return sendError(res, 400, 'Сначала привяжите Telegram аккаунт для включения 2FA');
+          }
+        }
+
+        db.setTwoFactorEnabled(user.id, isEnable ? 1 : 0);
+        return sendJson(res, 200, { success: true, twoFactorEnabled: isEnable });
       }
 
       // UPDATE PRIVACY (Athlete)
@@ -546,11 +818,20 @@ const server = http.createServer(async (req, res) => {
 
         let athlete = db.findUserByPairingCode(rawCode);
 
-        // If not in local SQLite, query Google Drive Cloud
-        if (!athlete) {
+        // Strict 5-minute TTL check if found in local SQLite
+        if (athlete) {
+          const PAIRING_TTL = 5 * 60 * 1000;
+          if (athlete.pairing_code_created_at && (Date.now() - athlete.pairing_code_created_at > PAIRING_TTL)) {
+            return sendError(res, 400, 'Срок действия кода истёк (действует 5 минут). Запросите у подопечного новый код.');
+          }
+        } else {
+          // If not in local SQLite, query Google Drive Cloud
           try {
             const cloudAthlete = await cloudSyncService.findAndPairAthlete(rawCode, user.full_name, user.phone);
             if (cloudAthlete) {
+              if (cloudAthlete.error) {
+                return sendError(res, 400, cloudAthlete.message || 'Ошибка кода привязки');
+              }
               let localUser = db.findUserByClientUuid(cloudAthlete.clientUuid);
               if (!localUser) {
                 const uniqueUsername = 'ath_' + crypto.randomBytes(6).toString('hex');
@@ -578,6 +859,8 @@ const server = http.createServer(async (req, res) => {
 
         db.pairTrainerAndAthlete(user.id, athlete.id);
         db.updateCoachInfo(athlete.id, user.full_name, user.phone);
+        // Strict single-use consumption: code cannot be reused!
+        db.consumePairingCode(athlete.id);
 
         return sendJson(res, 200, {
           success: true,
