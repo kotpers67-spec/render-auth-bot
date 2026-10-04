@@ -457,7 +457,7 @@ const server = http.createServer(async (req, res) => {
           );
 
           if (role === 'athlete') {
-            cloudSyncService.registerAthletePairing(pairingCode, clientUuid, escapeHtml(fullName), '').catch(() => {});
+            cloudSyncService.registerAthletePairing(pairingCode, clientUuid, escapeHtml(fullName), '', '', tgPhotoUrl || '').catch(() => {});
           }
 
           user = db.findUserById(userId);
@@ -619,8 +619,9 @@ const server = http.createServer(async (req, res) => {
         // Code is verified and consumed (single-use guaranteed)
         telegramOtpStore.delete(cleanUsername);
 
-        const usernameKey = `tg_${cleanUsername}`;
-        const user = db.findUserByUsername(usernameKey);
+        let user = db.findUserByUsername(cleanUsername);
+        if (!user) user = db.findUserByUsername(`tg_${cleanUsername}`);
+        if (!user) user = db.findUserByTelegramUsername(cleanUsername);
 
         if (user) {
           const token = generateToken();
@@ -694,7 +695,7 @@ const server = http.createServer(async (req, res) => {
           );
 
           if (role === 'athlete') {
-            cloudSyncService.registerAthletePairing(pairingCode, clientUuid, escapedFullName, escapedPhone).catch(() => {});
+            cloudSyncService.registerAthletePairing(pairingCode, clientUuid, escapedFullName, escapedPhone, '', avatarBase64 || '').catch(() => {});
           }
 
           user = db.findUserById(userId);
@@ -748,7 +749,7 @@ const server = http.createServer(async (req, res) => {
           if (!user.pairing_code || (Date.now() - (user.pairing_code_created_at || 0) > PAIRING_TTL)) {
             const newPin = String(Math.floor(100000 + Math.random() * 900000));
             db.regeneratePairingCode(user.id, newPin);
-            cloudSyncService.registerAthletePairing(newPin, user.client_uuid, user.full_name, user.phone).catch(() => {});
+            cloudSyncService.registerAthletePairing(newPin, user.client_uuid, user.full_name, user.phone, '', user.avatar_base64 || '').catch(() => {});
             user.pairing_code = newPin;
             user.pairing_code_created_at = Date.now();
           }
@@ -810,7 +811,9 @@ const server = http.createServer(async (req, res) => {
             updatedUser.pairing_code,
             updatedUser.client_uuid,
             updatedUser.full_name,
-            updatedUser.phone
+            updatedUser.phone,
+            '',
+            updatedUser.avatar_base64 || ''
           ).catch(() => {});
         }
 
@@ -847,7 +850,7 @@ const server = http.createServer(async (req, res) => {
         const newPin = String(Math.floor(100000 + Math.random() * 900000));
         db.regeneratePairingCode(user.id, newPin);
 
-        cloudSyncService.registerAthletePairing(newPin, user.client_uuid, user.full_name, user.phone).catch(() => {});
+        cloudSyncService.registerAthletePairing(newPin, user.client_uuid, user.full_name, user.phone, '', user.avatar_base64 || '').catch(() => {});
 
         return sendJson(res, 200, {
           success: true,
@@ -1013,9 +1016,13 @@ const server = http.createServer(async (req, res) => {
                   cloudAthlete.clientName || 'Подопечный',
                   cloudAthlete.phone || '',
                   rawCode,
-                  cloudAthlete.clientUuid
+                  cloudAthlete.clientUuid,
+                  cloudAthlete.avatarBase64 || ''
                 );
                 localUser = db.findUserById(uid);
+              } else if (cloudAthlete.avatarBase64 && !localUser.avatar_base64) {
+                db.updateProfile(localUser.id, localUser.full_name, localUser.phone, cloudAthlete.avatarBase64);
+                localUser = db.findUserById(localUser.id);
               }
               athlete = localUser;
             }
