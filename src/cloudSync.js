@@ -212,14 +212,14 @@ class CloudSyncService {
     pairingEntry.pairedTimestamp = Date.now();
     cloud.pairing[foundKey] = pairingEntry;
 
-    if (cloud.clients && cloud.clients[clientUuid]) {
+    const clientUuid = pairingEntry.clientUuid;
+    if (clientUuid && cloud.clients && cloud.clients[clientUuid]) {
       cloud.clients[clientUuid].coachName = coachName;
       cloud.clients[clientUuid].coachPhone = coachPhone;
       cloud.clients[clientUuid].coachAvatarBase64 = coachAvatarBase64 || '';
     }
 
-    const clientUuid = pairingEntry.clientUuid;
-    const clientPayload = (cloud.clients && cloud.clients[clientUuid]) ? cloud.clients[clientUuid] : null;
+    const clientPayload = (clientUuid && cloud.clients && cloud.clients[clientUuid]) ? cloud.clients[clientUuid] : null;
     const athleteAvatar = pairingEntry.avatarBase64 || clientPayload?.avatarBase64 || '';
 
     await this.pushCloudData(cloud);
@@ -582,8 +582,8 @@ class CloudSyncService {
       for (const [uuid, entry] of Object.entries(cloud.clients)) {
         if (!entry || !entry.clientName) continue;
         const rawName = String(entry.clientName).trim();
-        // Skip obvious automated test probes or spam bots
-        if (/^(adv_|test_|spam_|xss|ratelimit_|sec_|athlete_1|trainer_1|Спам Бот|Отладка|Тест)/i.test(rawName)) continue;
+        // Skip obvious automated test probes, spam bots, or test accounts
+        if (/^(adv_|test_|spam_|xss|ratelimit_|sec_|athlete_1|trainer_1|Спам Бот|Отладка|Тест)/i.test(rawName) || /смирнов|smirnov/i.test(rawName)) continue;
         const name = rawName.replace(/\s*\((Web|Mobile Athlete|Mobile|ВЫ)\)/gi, '').trim();
 
         const workouts = Array.isArray(entry.assignedWorkouts) ? entry.assignedWorkouts : [];
@@ -621,7 +621,7 @@ class CloudSyncService {
     // 2. Add local real athletes
     for (const a of localAthletes) {
       const rawName = String(a.full_name || a.fullName || a.username).trim();
-      if (/^(adv_|test_|spam_|xss|ratelimit_|sec_|athlete_1|trainer_1|Спам Бот|Отладка|Тест)/i.test(rawName)) continue;
+      if (/^(adv_|test_|spam_|xss|ratelimit_|sec_|athlete_1|trainer_1|Спам Бот|Отладка|Тест)/i.test(rawName) || /смирнов|smirnov/i.test(rawName)) continue;
       const name = rawName.replace(/\s*\((Web|Mobile Athlete|Mobile|ВЫ)\)/gi, '').trim();
       const key = name.toLowerCase();
 
