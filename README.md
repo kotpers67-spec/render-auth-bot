@@ -1,36 +1,29 @@
-# Render Auth Bot & Fallback Handler
+# Fitness Ecosystem Pro Web & Telegram Bot
 
-Авторизация через Telegram и Яндекс для Render.com с поддержкой автономного локального входа в мобильных приложениях.
+Официальный веб-портал, бот авторизации и центр загрузки релизов мобильных приложений экосистемы Fitness Pro.
 
-## 🚀 Особенности
-- **Telegram Auth**: Валидация подписи HMAC-SHA256 (`/api/auth/telegram`).
-- **Яндекс ID OAuth 2.0**: Обмен кодов авторизации на профиль (`/api/auth/yandex`).
-- **Offline Fallback**: Эндпоинт `/health` для проверки доступности сервера за 3 секунды. Если Render выключен, мобильное приложение работает штатно с локального диска.
-- **Render.com Ready**: Включен файл `render.yaml` для мгновенного развертывания.
+## 🚀 Возможности
+- **Веб-приложение (PWA)**: Личные кабинеты атлета и тренера, интерактивные графики прогресса (3 шкалы: вес, подходы, повторения), учет веса тела.
+- **Telegram Bot (grammY)**: Двухфакторная аутентификация (2FA), быстрая авторизация по одноразовым 5-минутным OTP-кодам, привязка аккаунтов.
+- **Динамическая ротация PIN**: 5-минутная смена защитного кода привязки подопечного к тренеру.
+- **Раздача релизных APK**: Прямые ссылки на загрузку актуальных мобильных приложений для Android:
+  - `/releases/athlete-pro-v1.0.7.apk` (Athlete Pro)
+  - `/releases/trainer-pro-v1.0.7.apk` (Trainer Pro)
 
-## 📱 Android Kotlin Fallback Snippet
-
-```kotlin
-import kotlinx.coroutines.withTimeout
-
-suspend fun attemptOnlineAuthWithFallback(
-    onlineAuthTask: suspend () -> UserProfile,
-    localDiskFallbackTask: suspend () -> UserProfile
-): UserProfile {
-    return try {
-        // Пробуем войти через Render (Telegram/Яндекс) с таймаутом 3 сек
-        withTimeout(3000) {
-            onlineAuthTask()
-        }
-    } catch (e: Exception) {
-        // Render недоступен или выключен -> Вход штатно с диска ПК/телефона
-        localDiskFallbackTask()
-    }
-}
-```
+## ⚙️ Развертывание на Render.com
+1. Создайте Web Service на [Render.com](https://render.com).
+2. Подключите репозиторий `kotpers67-spec/render-auth-bot`.
+3. Укажите параметры:
+   - **Environment**: `Node`
+   - **Build Command**: `npm install`
+   - **Start Command**: `npm start`
+4. Добавьте переменную окружения (Environment Variable):
+   - `BOT_TOKEN`: токен вашего бота от `@BotFather`
+   - `PORT`: `10000` (выставляется автоматически)
 
 ## 🛠️ Запуск локально
 ```bash
 npm install
-npm run dev
+npm start
 ```
+Сервер будет доступен по адресу `http://localhost:3000`.

@@ -5,10 +5,11 @@
   "main": "src/server.js",
   "scripts": {
     "start": "node src/server.js",
-    "test": "node --test tests/security.test.js tests/pin_2fa.test.js",
+    "test": "node --test --test-concurrency=1 tests/security.test.js tests/pin_2fa.test.js",
     "test:security": "node --test tests/security.test.js"
   },
   "dependencies": {
-    "grammy": "^1.28.0"
+    "grammy": "^1.28.0",
+    "qrcode": "^1.5.4"
   }
 }
