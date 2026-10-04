@@ -1351,11 +1351,39 @@
           method: 'POST',
           body: JSON.stringify({ username, password, role, fullName, phone })
         });
+
+        if (data.pendingApproval) {
+          el.formRegister.style.display = 'none';
+          let pendingBox = document.getElementById('register-pending-notice');
+          if (!pendingBox) {
+            pendingBox = document.createElement('div');
+            pendingBox.id = 'register-pending-notice';
+            pendingBox.className = 'pending-approval-box';
+            el.formRegister.parentNode.insertBefore(pendingBox, el.formRegister.nextSibling);
+          }
+          pendingBox.innerHTML = `
+            <div class="pending-approval-title">⏳ ЗАЯВКА НА РАССМОТРЕНИИ</div>
+            <p class="pending-approval-text">
+              Ваша заявка на создание аккаунта тренера принята!
+            </p>
+            <p class="pending-approval-text" style="font-size: 11px; opacity: 0.85; margin-bottom: 10px;">
+              Если в течение <b>72 часов</b> аккаунт не будет создана, обратитесь к владельцу:
+            </p>
+            <div class="owners-links-row">
+              <a href="https://t.me/SantiLA213" target="_blank" class="owner-chip">💬 @SantiLA213</a>
+              <a href="https://t.me/Spirit5449" target="_blank" class="owner-chip">💬 @Spirit5449</a>
+            </div>
+          `;
+          pendingBox.style.display = 'block';
+          showToast('Заявка на аккаунт тренера отправлена владельцу!', 'info');
+          return;
+        }
+
         state.token = data.token;
         state.user = data.user;
         localStorage.setItem('fit_token', data.token);
         setupAppForRole(data.user.role);
-        showToast('Аккаунт успешно создан!', 'success');
+        showToast('Аккаунт атлета успешно создан!', 'success');
       } catch {}
     };
 
@@ -1453,11 +1481,15 @@
           el.tgStepRequest.style.display = 'none';
           el.tgStepVerify.style.display = 'block';
           startTgTimer(res.expiresInSeconds || 300);
-
-          if (res.debugCode) {
-            el.tgInputCode.value = res.debugCode;
-          }
+          el.tgInputCode.value = '';
           el.tgInputCode.focus();
+
+          const botHint = document.getElementById('tg-bot-link-hint');
+          if (botHint) {
+            const bName = res.botUsername || 'fitness_ecosystem_bot';
+            botHint.innerHTML = `<a href="https://t.me/${bName}?start=login" target="_blank" class="app-btn btn-secondary" style="text-decoration:none;display:flex;align-items:center;justify-content:center;gap:6px;font-size:13px;padding:9px 12px;background:#2AABEE;color:#fff;border-radius:10px;font-weight:600;margin-top:6px;"><span>🤖</span><span>Открыть бота @${bName} для получения кода</span></a>`;
+            botHint.style.display = 'block';
+          }
         } catch (_) {}
       };
     }
