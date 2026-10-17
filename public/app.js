@@ -16,15 +16,31 @@
     return token || null;
   }
 
-  function saveAuthToken(token) {
+  function getInitialUser() {
+    try {
+      const raw = localStorage.getItem('fit_user');
+      return raw ? JSON.parse(raw) : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  function saveAuthToken(token, user = null) {
     state.token = token;
     if (token) {
       localStorage.setItem('fit_token', token);
+      if (user) {
+        state.user = user;
+        try {
+          localStorage.setItem('fit_user', JSON.stringify(user));
+        } catch (_) {}
+      }
       if (typeof document !== 'undefined') {
         document.cookie = `fit_token=${token}; max-age=31536000; path=/; SameSite=Lax`;
       }
     } else {
       localStorage.removeItem('fit_token');
+      localStorage.removeItem('fit_user');
       if (typeof document !== 'undefined') {
         document.cookie = `fit_token=; max-age=0; path=/`;
       }
@@ -32,15 +48,17 @@
   }
 
   // --- Global Application State ---
+  const cachedInitialUser = getInitialUser();
   const state = {
     token: getInitialToken(),
-    user: null,
+    user: cachedInitialUser,
     pairedCoach: null,
     activeTab: 'workout',
     currentDate: new Date().toISOString().slice(0, 10),
     trainerDate: new Date().toISOString().slice(0, 10),
     activeClientId: null,
     clients: [],
+    clientsSearchQuery: '',
     athleteSets: [],
     trainerSets: [],
     leaderboard: [],
@@ -52,7 +70,18 @@
     linkTgTimerInterval: null,
     athleteSelectedExercise: null,
     trainerSelectedExercise: null,
-    deferredInstallPrompt: null
+    chartMetrics: {
+      weight: true,
+      sets: true,
+      reps: true
+    },
+    customExercises: [],
+    catalogSearchQuery: '',
+    catalogSelectedGroup: 'Все',
+    deferredInstallPrompt: null,
+    restTimerSeconds: 0,
+    restTimerTotal: 90,
+    restTimerInterval: null
   };
 
   // --- DOM Elements ---
@@ -125,7 +154,6 @@
     athleteInputExercise: document.getElementById('athlete-input-exercise'),
     athleteInputWeight: document.getElementById('athlete-input-weight'),
     athleteInputReps: document.getElementById('athlete-input-reps'),
-    athleteInputRpe: document.getElementById('athlete-input-rpe'),
     athleteWorkoutMatrix: document.getElementById('athlete-workout-matrix'),
 
     // Athlete History
@@ -143,10 +171,13 @@
     profileFullName: document.getElementById('profile-full-name'),
     profileUsername: document.getElementById('profile-username'),
     profilePhone: document.getElementById('profile-phone'),
+    profileRestrictionsBadgeRow: document.getElementById('profile-restrictions-badge-row'),
+    profileRestrictionsDisplay: document.getElementById('profile-restrictions-display'),
     athleteAvatarPreview: document.getElementById('athlete-avatar-preview'),
     athleteAvatarInput: document.getElementById('athlete-avatar-input'),
     athleteEditName: document.getElementById('athlete-edit-name'),
     athleteEditPhone: document.getElementById('athlete-edit-phone'),
+    athleteEditRestrictions: document.getElementById('athlete-edit-restrictions'),
     btnSaveAthleteProfile: document.getElementById('btn-save-athlete-profile'),
     athletePairingPin: document.getElementById('athlete-pairing-pin'),
     athleteQrContainer: document.getElementById('athlete-qr-container'),
@@ -169,6 +200,8 @@
     inputPairCode: document.getElementById('input-pairing-code'),
     inputQrFile: document.getElementById('input-qr-file'),
     trainerClientsList: document.getElementById('trainer-clients-list'),
+    trainerClientsSearch: document.getElementById('trainer-clients-search'),
+    trainerClientsCountBadge: document.getElementById('trainer-clients-count-badge'),
 
     // Trainer Workout
     trainerWorkoutNotice: document.getElementById('trainer-workout-target-notice'),
@@ -179,9 +212,9 @@
     trainerAllowSelfWorkout: document.getElementById('trainer-allow-self-workout'),
     formTrainerAddSet: document.getElementById('form-trainer-add-set'),
     trainerInputExercise: document.getElementById('trainer-input-exercise'),
+    trainerExerciseSearchResults: document.getElementById('trainer-exercise-search-results'),
     trainerInputWeight: document.getElementById('trainer-input-weight'),
     trainerInputReps: document.getElementById('trainer-input-reps'),
-    trainerInputRpe: document.getElementById('trainer-input-rpe'),
     trainerWorkoutMatrix: document.getElementById('trainer-workout-matrix'),
 
     // Trainer History
@@ -198,6 +231,32 @@
     trainerEditPhone: document.getElementById('trainer-edit-phone'),
     btnSaveTrainerProfile: document.getElementById('btn-save-trainer-profile'),
     btnLogoutTrainer: document.getElementById('btn-logout-trainer'),
+
+    // Trainer Exercises Catalog Elements (Mobile Parity CRUD)
+    trainerCatalogTitle: document.getElementById('trainer-catalog-title'),
+    btnOpenAddExercise: document.getElementById('btn-open-add-exercise'),
+    trainerCatalogSearch: document.getElementById('trainer-catalog-search'),
+    trainerCatalogGroupChips: document.getElementById('trainer-catalog-group-chips'),
+    trainerCatalogList: document.getElementById('trainer-catalog-list'),
+    dialogEditExercise: document.getElementById('dialog-edit-exercise'),
+    dialogEditExerciseTitle: document.getElementById('dialog-edit-exercise-title'),
+    btnCloseExerciseDialog: document.getElementById('btn-close-exercise-dialog'),
+    btnCancelEditExercise: document.getElementById('btn-cancel-edit-exercise'),
+    formEditExercise: document.getElementById('form-edit-exercise'),
+    editExerciseId: document.getElementById('edit-exercise-id'),
+    editExerciseName: document.getElementById('edit-exercise-name'),
+    editExerciseGroup: document.getElementById('edit-exercise-group'),
+    editExerciseRest: document.getElementById('edit-exercise-rest'),
+
+    // Athlete & Trainer Unpair with Telegram OTP
+    dialogUnpairConfirm: document.getElementById('dialog-unpair-confirm'),
+    dialogUnpairTitle: document.getElementById('dialog-unpair-title'),
+    dialogUnpairDesc: document.getElementById('dialog-unpair-desc'),
+    btnCloseUnpairDialog: document.getElementById('btn-close-unpair-dialog'),
+    btnCancelUnpairDialog: document.getElementById('btn-cancel-unpair-dialog'),
+    formUnpairConfirm: document.getElementById('form-unpair-confirm'),
+    unpairInputCode: document.getElementById('unpair-input-code'),
+    unpairTgTimerDisplay: document.getElementById('unpair-tg-timer-display'),
 
     // 2FA & Telegram Link Elements
     pinCountdownText: document.getElementById('pin-countdown-text'),
@@ -253,6 +312,14 @@
     trainerScaleAvgReps: document.getElementById('trainer-scale-avg-reps'),
     btnTrainerAddWeight: document.getElementById('btn-trainer-add-weight'),
 
+    // Interactive Metric Toggles for Charts
+    btnToggleMetricWeight: document.getElementById('btn-toggle-metric-weight'),
+    btnToggleMetricSets: document.getElementById('btn-toggle-metric-sets'),
+    btnToggleMetricReps: document.getElementById('btn-toggle-metric-reps'),
+    btnTrainerToggleMetricWeight: document.getElementById('btn-trainer-toggle-metric-weight'),
+    btnTrainerToggleMetricSets: document.getElementById('btn-trainer-toggle-metric-sets'),
+    btnTrainerToggleMetricReps: document.getElementById('btn-trainer-toggle-metric-reps'),
+
     // PWA & Mobile App Download
     pwaInstallBanner: document.getElementById('pwa-install-banner'),
     btnPwaInstall: document.getElementById('btn-pwa-install'),
@@ -260,7 +327,13 @@
     btnOpenDownloadModal: document.getElementById('btn-open-download-modal'),
     dialogDownloadApp: document.getElementById('dialog-download-app'),
     btnCloseDownloadDialog: document.getElementById('btn-close-download-dialog'),
-    btnTriggerPwaInstallDialog: document.getElementById('btn-trigger-pwa-install-dialog')
+    btnTriggerPwaInstallDialog: document.getElementById('btn-trigger-pwa-install-dialog'),
+
+    // Floating Rest Timer
+    restTimerBanner: document.getElementById('rest-timer-banner'),
+    restTimerDigits: document.getElementById('rest-timer-digits'),
+    btnTimerAdd30: document.getElementById('btn-timer-add-30'),
+    btnTimerCancel: document.getElementById('btn-timer-cancel')
   };
 
   // --- API Client Helper ---
@@ -351,19 +424,55 @@
 
   // --- Auth & Session Lifecycle ---
   async function initAuth() {
+    // 1. Initialize Telegram WebApp environment if opened inside Telegram
+    if (window.Telegram?.WebApp) {
+      try {
+        window.Telegram.WebApp.ready();
+        window.Telegram.WebApp.expand();
+      } catch (_) {}
+    }
+
+    // 2. Seamless auto-login if launched inside Telegram Mini App without saved session
+    if (!state.token && window.Telegram?.WebApp?.initData) {
+      try {
+        const authRes = await api('/api/auth/telegram', {
+          method: 'POST',
+          body: JSON.stringify({ initData: window.Telegram.WebApp.initData })
+        });
+        if (authRes && authRes.token && authRes.user) {
+          state.token = authRes.token;
+          state.user = authRes.user;
+          saveAuthToken(authRes.token, authRes.user);
+          setupAppForRole(authRes.user.role);
+          showToast(`Добро пожаловать, ${authRes.user.fullName || authRes.user.username}!`, 'success');
+          return;
+        }
+      } catch (err) {
+        console.warn('[Fitness Pro] Telegram Mini App auto-auth fallback:', err.message);
+      }
+    }
+
     if (!state.token) {
       showAuthScreen();
       return;
+    }
+
+    // Instant seamless hydration if cached session exists (prevents auth screen flicker on refresh)
+    if (state.user && (state.user.role === 'athlete' || state.user.role === 'trainer')) {
+      setupAppForRole(state.user.role);
     }
 
     try {
       const data = await api('/api/me');
       state.user = data.user;
       state.pairedCoach = data.pairedCoach || null;
+      try {
+        localStorage.setItem('fit_user', JSON.stringify(data.user));
+      } catch (_) {}
       setupAppForRole(state.user.role);
     } catch (err) {
-      // Only reset session if server explicitly responded with 401 Unauthorized
-      if (err?.message?.includes('401') || err?.message?.includes('Сессия завершена')) {
+      // Only reset session if server explicitly responded with 401 Unauthorized or 403 Forbidden
+      if (err?.message?.includes('401') || err?.message?.includes('403') || err?.message?.includes('Сессия завершена') || err?.message?.includes('Требуется авторизация')) {
         logout(false);
       } else {
         // On offline/transient network errors, keep cached session alive
@@ -436,7 +545,8 @@
       el.topbarRoleBadge.textContent = 'Тренер';
       el.topbarRoleBadge.style.display = 'inline-block';
       buildTrainerBottomNav();
-      navigateToTab('trainer-home');
+      navigateToTab('trainer-workout');
+      loadTrainerWorkoutSets();
       loadTrainerClients();
     } else {
       el.topbarTitle.textContent = 'ATHLETE PRO';
@@ -484,17 +594,17 @@
   function buildTrainerBottomNav() {
     el.bottomNav.innerHTML = `
       <div class="nav-items-wrapper">
-        <button class="nav-item active" data-tab="trainer-home">
-          <span class="nav-item-icon">
-            <svg viewBox="0 0 24 24"><path d="M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5c-1.66 0-3 1.34-3 3s1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5C6.34 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5z"/></svg>
-          </span>
-          <span class="nav-item-label">Подопечные</span>
-        </button>
-        <button class="nav-item" data-tab="trainer-workout">
+        <button class="nav-item active" data-tab="trainer-workout">
           <span class="nav-item-icon">
             <svg viewBox="0 0 24 24"><path d="M20.57 14.86L22 13.43 20.57 12 17 15.57 8.43 7 12 3.43 10.57 2 9.14 3.43 7.71 2 5.57 4.14 4.14 2.71 2.71 4.14l1.43 1.43L2 7.71l1.43 1.43L2 10.57 3.43 12 7 8.43 15.57 17 12 20.57 13.43 22l1.43-1.43L16.29 22l2.14-2.14 1.43 1.43 1.43-1.43-1.43-1.43L22 16.29z"/></svg>
           </span>
           <span class="nav-item-label">Тренировка</span>
+        </button>
+        <button class="nav-item" data-tab="trainer-home">
+          <span class="nav-item-icon">
+            <svg viewBox="0 0 24 24"><path d="M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5c-1.66 0-3 1.34-3 3s1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5C6.34 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5z"/></svg>
+          </span>
+          <span class="nav-item-label">Подопечные</span>
         </button>
         <button class="nav-item" data-tab="trainer-history">
           <span class="nav-item-icon">
@@ -599,6 +709,80 @@
     }
   }
 
+  // --- Rest Timer Engine (Athlete Pro Parity) ---
+  function startRestTimer(durationSeconds = 90) {
+    stopRestTimer();
+    state.restTimerSeconds = Math.max(1, durationSeconds);
+    state.restTimerTotal = state.restTimerSeconds;
+
+    if (el.restTimerBanner) {
+      el.restTimerBanner.style.display = 'flex';
+      updateRestTimerDisplay();
+    }
+
+    state.restTimerInterval = setInterval(() => {
+      state.restTimerSeconds--;
+      updateRestTimerDisplay();
+
+      if (state.restTimerSeconds <= 0) {
+        stopRestTimer();
+        showToast('⏰ Время отдыха окончено! Начинайте подход.', 'success');
+        try {
+          const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+          const osc = audioCtx.createOscillator();
+          const gain = audioCtx.createGain();
+          osc.type = 'sine';
+          osc.frequency.setValueAtTime(880, audioCtx.currentTime);
+          gain.gain.setValueAtTime(0.2, audioCtx.currentTime);
+          osc.connect(gain);
+          gain.connect(audioCtx.destination);
+          osc.start();
+          osc.stop(audioCtx.currentTime + 0.4);
+        } catch (_) {}
+      }
+    }, 1000);
+  }
+
+  function addRestTimerSeconds(seconds = 30) {
+    state.restTimerSeconds += seconds;
+    state.restTimerTotal = Math.max(state.restTimerTotal, state.restTimerSeconds);
+    updateRestTimerDisplay();
+    showToast(`+${seconds} сек к отдыху`, 'info');
+  }
+
+  function stopRestTimer() {
+    if (state.restTimerInterval) {
+      clearInterval(state.restTimerInterval);
+      state.restTimerInterval = null;
+    }
+    state.restTimerSeconds = 0;
+    if (el.restTimerBanner) {
+      el.restTimerBanner.style.display = 'none';
+    }
+  }
+
+  function updateRestTimerDisplay() {
+    if (!el.restTimerDigits) return;
+    const m = Math.floor(state.restTimerSeconds / 60).toString().padStart(2, '0');
+    const s = (state.restTimerSeconds % 60).toString().padStart(2, '0');
+    el.restTimerDigits.textContent = `${m}:${s}`;
+  }
+
+  function getEarliestSessionTimestamp(sets) {
+    let earliestMs = null;
+    sets.forEach(s => {
+      if (s.created_at) {
+        let dStr = s.created_at;
+        if (!dStr.includes('T')) dStr = dStr.replace(' ', 'T') + 'Z';
+        const t = new Date(dStr).getTime();
+        if (!isNaN(t) && (earliestMs === null || t < earliestMs)) {
+          earliestMs = t;
+        }
+      }
+    });
+    return earliestMs;
+  }
+
   function renderAthleteWorkoutMatrix() {
     el.athleteWorkoutMatrix.innerHTML = '';
     if (state.athleteSets.length === 0) {
@@ -611,6 +795,9 @@
       return;
     }
 
+    const earliestMs = getEarliestSessionTimestamp(state.athleteSets);
+    const isAfterOneHour = earliestMs ? (Date.now() - earliestMs >= 60 * 60 * 1000) : false;
+
     // Group sets by exercise name
     const grouped = {};
     state.athleteSets.forEach(s => {
@@ -619,9 +806,25 @@
       grouped[name].push(s);
     });
 
-    for (const [exName, sets] of Object.entries(grouped)) {
+    const groups = Object.entries(grouped).map(([exName, sets]) => {
+      const isCompleted = sets.length > 0 && sets.every(s => Boolean(s.is_completed));
+      const earliestId = Math.min(...sets.map(s => s.id || 0));
+      return { exName, sets, isCompleted, earliestId };
+    });
+
+    // Incomplete exercises go to TOP, completed go to BOTTOM
+    groups.sort((a, b) => {
+      if (a.isCompleted !== b.isCompleted) {
+        return a.isCompleted ? 1 : -1;
+      }
+      return a.earliestId - b.earliestId;
+    });
+
+    for (const group of groups) {
+      const { exName, sets, isCompleted } = group;
+      const shouldCollapse = isCompleted && isAfterOneHour;
       const card = document.createElement('div');
-      card.className = 'exercise-group-card';
+      card.className = `exercise-group-card ${isCompleted ? 'completed-card' : ''} ${shouldCollapse ? 'collapsed' : ''}`;
 
       let setsHtml = '';
       sets.forEach((set, idx) => {
@@ -629,33 +832,103 @@
         setsHtml += `
           <div class="set-row">
             <span class="set-num">${idx + 1}</span>
-            <span class="set-weight-reps">${set.weight_kg} кг × ${set.reps} повт</span>
-            <span class="set-rpe-badge">RPE ${set.rpe || 8}</span>
+            <div class="set-inputs-row">
+              <input type="number" step="0.5" min="0" class="set-input-mini input-set-weight" data-id="${set.id}" value="${set.weight_kg}" title="Вес (кг)">
+              <span style="color:var(--text-muted);font-size:11px;">кг ×</span>
+              <input type="number" step="1" min="1" class="set-input-mini input-set-reps" data-id="${set.id}" value="${set.reps}" title="Повторения">
+              <span style="color:var(--text-muted);font-size:11px;">повт</span>
+            </div>
             <button class="set-check-btn ${isComp ? 'completed' : ''}" data-id="${set.id}" title="Отметить выполнение">
               ${isComp ? '✓' : ''}
             </button>
-            <button class="set-delete-btn" data-id="${set.id}" title="Удалить">✕</button>
+            <button class="set-delete-btn" data-id="${set.id}" title="Удалить подход">✕</button>
           </div>
         `;
       });
 
       card.innerHTML = `
         <div class="exercise-group-title">
-          <span>${escapeHtml(exName)}</span>
-          <span style="font-size: 11px; color: var(--text-muted);">${sets.length} подходов</span>
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <span>${escapeHtml(exName)}</span>
+            ${isCompleted ? '<span class="status-pill done" style="font-size:10px; padding:2px 6px;">✓ Завершено</span>' : ''}
+          </div>
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <span style="font-size: 11px; color: var(--text-muted);">${sets.length} подходов</span>
+            <button type="button" class="collapse-toggle-btn" title="Свернуть/Развернуть">
+              ${shouldCollapse ? '▶ Развернуть' : '▼ Свернуть'}
+            </button>
+          </div>
         </div>
         <div class="sets-table">${setsHtml}</div>
+        <div class="exercise-card-actions">
+          ${isSelfAllowed ? `
+            <button type="button" class="btn-action-pill btn-action-primary btn-add-set-to-exercise" data-name="${escapeHtml(exName)}" data-last-weight="${sets.length > 0 ? sets[sets.length - 1].weight_kg : 20}" data-last-reps="${sets.length > 0 ? sets[sets.length - 1].reps : 10}">
+              ➕ + ПОДХОД
+            </button>
+          ` : ''}
+          <button type="button" class="btn-action-pill btn-action-cyan btn-view-exercise-stats" data-name="${escapeHtml(exName)}">
+            📊 СТАТИСТИКА
+          </button>
+        </div>
       `;
 
-      // Set toggle handler
+      const toggleBtn = card.querySelector('.collapse-toggle-btn');
+      if (toggleBtn) {
+        toggleBtn.onclick = (e) => {
+          e.stopPropagation();
+          card.classList.toggle('collapsed');
+          const isNowCollapsed = card.classList.contains('collapsed');
+          toggleBtn.textContent = isNowCollapsed ? '▶ Развернуть' : '▼ Свернуть';
+        };
+      }
+
+      // Add set to this specific exercise (Athlete)
+      const addSetBtn = card.querySelector('.btn-add-set-to-exercise');
+      if (addSetBtn) {
+        addSetBtn.onclick = () => {
+          openQuickAddSetDialog(exName, Number(addSetBtn.dataset.lastWeight) || 20, Number(addSetBtn.dataset.lastReps) || 10, 'athlete');
+        };
+      }
+
+      // View exercise history stats dialog (Athlete)
+      const statsBtn = card.querySelector('.btn-view-exercise-stats');
+      if (statsBtn) {
+        statsBtn.onclick = () => {
+          openExerciseStatsDialog(exName, state.user.id, state.athleteDate);
+        };
+      }
+
+      // Set input change handler (weight / reps auto-save)
+      card.querySelectorAll('.input-set-weight, .input-set-reps').forEach(inp => {
+        inp.onchange = async () => {
+          const setId = inp.dataset.id;
+          const row = inp.closest('.set-row');
+          const weightKg = parseFloat(row.querySelector('.input-set-weight').value) || 0;
+          const reps = parseInt(row.querySelector('.input-set-reps').value, 10) || 1;
+          try {
+            await api('/api/workout/set', {
+              method: 'PUT',
+              body: JSON.stringify({ setId, weightKg, reps })
+            });
+            showToast('Подход обновлен', 'info');
+          } catch (err) {
+            showToast('Ошибка сохранения', 'error');
+          }
+        };
+      });
+
+      // Set toggle handler + trigger rest timer on completion
       card.querySelectorAll('.set-check-btn').forEach(btn => {
         btn.onclick = async () => {
           const setId = btn.dataset.id;
           try {
-            await api('/api/workout/set/toggle', {
+            const res = await api('/api/workout/set/toggle', {
               method: 'POST',
               body: JSON.stringify({ setId })
             });
+            if (res && res.isCompleted) {
+              startRestTimer(90); // 90 seconds default coach rest timer
+            }
             loadAthleteWorkoutSets();
           } catch {}
         };
@@ -900,22 +1173,76 @@
       });
     }
 
-    // 1. Draw Sets Series (Cyan #38bdf8)
-    drawSeries(pointsSets, '#38bdf8', 2);
-    // 2. Draw Reps Series (Rose #f43f5e)
-    drawSeries(pointsReps, '#f43f5e', 2);
-    // 3. Draw Weight Series (Neon Lime #c8ff00)
-    drawSeries(pointsWeight, '#c8ff00', 3);
+    // 1. Draw Sets Series (Cyan #38bdf8) if active
+    if (state.chartMetrics.sets) {
+      drawSeries(pointsSets, '#38bdf8', 2);
+    }
+    // 2. Draw Reps Series (Rose #f43f5e) if active
+    if (state.chartMetrics.reps) {
+      drawSeries(pointsReps, '#f43f5e', 2);
+    }
+    // 3. Draw Weight Series (Neon Lime #c8ff00) if active
+    if (state.chartMetrics.weight) {
+      drawSeries(pointsWeight, '#c8ff00', 3);
+      // Draw Date and Weight text on dots
+      ctx.textAlign = 'center';
+      ctx.font = 'bold 9px system-ui, sans-serif';
+      pointsWeight.forEach(pt => {
+        ctx.fillStyle = '#c8ff00';
+        ctx.fillText(`${pt.val} кг`, pt.x, Math.max(14, pt.y - 8));
+      });
+    }
 
     // Draw Date Axis Labels
     ctx.textAlign = 'center';
     ctx.fillStyle = '#a1a1aa';
-    pointsWeight.forEach((pt, idx) => {
-      if (idx === 0 || idx === pointsWeight.length - 1 || idx % Math.ceil(pointsWeight.length / 5) === 0) {
+    ctx.font = '10px system-ui, sans-serif';
+    const referencePoints = pointsWeight.length > 0 ? pointsWeight : pointsSets;
+    referencePoints.forEach((pt, idx) => {
+      if (idx === 0 || idx === referencePoints.length - 1 || idx % Math.ceil(referencePoints.length / 5) === 0) {
         const shortDate = pt.date ? pt.date.slice(5) : '';
         ctx.fillText(shortDate, pt.x, height - 12);
       }
     });
+
+    // Interactive Click on Points to see detailed sets breakdown
+    canvas._pointClickData = dayStats.map((st, idx) => {
+      const pt = pointsWeight[idx];
+      const setsForDate = byDate.get(st.date) || [];
+      return {
+        x: pt.x,
+        y: pt.y,
+        date: st.date,
+        maxWeight: st.maxWeight,
+        setsCount: st.setsCount,
+        avgReps: st.avgReps,
+        sets: setsForDate
+      };
+    });
+
+    if (!canvas._hasClickBound) {
+      canvas._hasClickBound = true;
+      canvas.style.cursor = 'pointer';
+      canvas.addEventListener('click', (evt) => {
+        const rect = canvas.getBoundingClientRect();
+        const scaleX = canvas.width / rect.width;
+        const scaleY = canvas.height / rect.height;
+        const clickX = (evt.clientX - rect.left) * scaleX;
+        const clickY = (evt.clientY - rect.top) * scaleY;
+
+        const dataPoints = canvas._pointClickData || [];
+        const found = dataPoints.find(pt => {
+          const dx = pt.x - clickX;
+          const dy = pt.y - clickY;
+          return Math.sqrt(dx * dx + dy * dy) <= 24;
+        });
+
+        if (found) {
+          const setDetails = found.sets.map((s, i) => `Подход ${i + 1}: ${s.weight_kg} кг × ${s.reps} повт`).join('\n');
+          showToast(`📅 ${found.date}\nМакс. вес: ${found.maxWeight} кг\nВсего подходов: ${found.setsCount}\n\n${setDetails}`, 'info');
+        }
+      });
+    }
   }
 
   // --- ATHLETE: Progress & History (Charts & Logs) ---
@@ -1016,7 +1343,7 @@
       item.innerHTML = `
         <div>
           <div style="font-weight: 700; font-size: 14px; color: var(--text-primary);">${escapeHtml(s.exercise_name)}</div>
-          <div style="font-size: 11px; color: var(--text-muted);">${s.date || state.currentDate} · RPE ${s.rpe || 8}</div>
+          <div style="font-size: 11px; color: var(--text-muted);">${s.date || state.currentDate}</div>
         </div>
         <div style="text-align: right;">
           <div style="font-weight: 800; color: var(--accent-lime); font-size: 14px;">${s.weight_kg} кг × ${s.reps}</div>
@@ -1031,18 +1358,20 @@
   async function loadLeaderboard() {
     try {
       const data = await api('/api/leaderboard');
-      state.leaderboard = data.leaderboard || [];
+      state.leaderboard = (data.leaderboard || []).filter(u => {
+        const n = (u.name || '').toLowerCase();
+        return !n.includes('смирнов') && !n.includes('smirnov') && !n.includes('тест') && !n.includes('спам');
+      });
 
       // Find current user stats
       const myName = (state.user?.fullName || state.user?.full_name || state.user?.username || '').toLowerCase();
       const meInBoard = state.leaderboard.find(u => (u.name || '').toLowerCase() === myName);
 
       const workouts = meInBoard ? meInBoard.workoutsCount || 0 : 0;
-      const tonnageKg = meInBoard ? meInBoard.totalTonnage || 0 : 0;
       const pts = meInBoard ? meInBoard.points || 0 : 0;
 
       el.userMetricWorkouts.textContent = workouts;
-      el.userMetricTonnage.textContent = tonnageKg >= 1000 ? `${(tonnageKg / 1000).toFixed(1)} т` : `${tonnageKg} кг`;
+      if (el.userMetricTonnage) el.userMetricTonnage.textContent = `${workouts} трен.`;
       el.userMetricPoints.textContent = pts;
 
       renderLeaderboardRows();
@@ -1074,14 +1403,12 @@
 
       const cleanName = String(entry.name || '').replace(/\s*\((Web|Mobile Athlete|Mobile)\)/gi, '').trim();
       const displayName = isMe ? `${escapeHtml(cleanName)} (ВЫ)` : escapeHtml(cleanName);
-      const tonnage = entry.totalTonnage || entry.tonnage_kg || 0;
-      const tonnageStr = tonnage >= 1000 ? `${(tonnage / 1000).toFixed(1)} т` : `${tonnage} кг`;
 
       row.innerHTML = `
         <div class="rank-badge ${rankClass}">${rank}</div>
         <div class="athlete-meta">
           <div class="athlete-name-text">${displayName}</div>
-          <div class="athlete-stats-sub">${entry.workoutsCount || 0} трен · ${tonnageStr}</div>
+          <div class="athlete-stats-sub">${entry.workoutsCount || 0} трен</div>
         </div>
         <div class="athlete-points-pill tabular-nums">${entry.points || 0} pts</div>
       `;
@@ -1096,8 +1423,19 @@
     el.profileUsername.textContent = `@${state.user.username}`;
     el.profilePhone.textContent = state.user.phone || 'Телефон не указан';
 
+    const restrictions = state.user.restrictions || '';
+    if (el.profileRestrictionsBadgeRow && el.profileRestrictionsDisplay) {
+      if (restrictions.trim()) {
+        el.profileRestrictionsDisplay.textContent = restrictions.trim();
+        el.profileRestrictionsBadgeRow.style.display = 'block';
+      } else {
+        el.profileRestrictionsBadgeRow.style.display = 'none';
+      }
+    }
+
     if (el.athleteEditName) el.athleteEditName.value = state.user.fullName || state.user.full_name || '';
     if (el.athleteEditPhone) el.athleteEditPhone.value = state.user.phone || '';
+    if (el.athleteEditRestrictions) el.athleteEditRestrictions.value = restrictions;
 
     const avatarB64 = state.user.avatar_base64 || state.user.avatarBase64;
     if (avatarB64 && el.athleteAvatarPreview) {
@@ -1285,7 +1623,10 @@
 
   function renderTrainerClientsList() {
     el.trainerClientsList.innerHTML = '';
-    if (state.clients.length === 0) {
+    const totalClients = state.clients.length;
+
+    if (totalClients === 0) {
+      if (el.trainerClientsCountBadge) el.trainerClientsCountBadge.textContent = '0';
       el.trainerClientsList.innerHTML = `
         <div style="text-align: center; padding: 24px; color: var(--text-muted); font-size: 13px;">
           У вас пока нет привязанных подопечных.<br>Введите 6-значный код подопечного выше, чтобы подключить его.
@@ -1294,7 +1635,36 @@
       return;
     }
 
-    state.clients.forEach(c => {
+    const q = (state.clientsSearchQuery || '').trim().toLowerCase();
+    const filteredClients = q
+      ? state.clients.filter(c => {
+          const name = (c.full_name || '').toLowerCase();
+          const username = (c.username || '').toLowerCase();
+          const phone = (c.phone || '').replace(/\D/g, '');
+          const queryDigits = q.replace(/\D/g, '');
+          return name.includes(q) ||
+                 username.includes(q) ||
+                 (c.phone && c.phone.toLowerCase().includes(q)) ||
+                 (queryDigits && phone.includes(queryDigits));
+        })
+      : state.clients;
+
+    if (el.trainerClientsCountBadge) {
+      el.trainerClientsCountBadge.textContent = q
+        ? `${filteredClients.length} / ${totalClients}`
+        : `${totalClients}`;
+    }
+
+    if (filteredClients.length === 0) {
+      el.trainerClientsList.innerHTML = `
+        <div style="text-align: center; padding: 24px; color: var(--text-muted); font-size: 13px;">
+          Подопечные по запросу «${escapeHtml(q)}» не найдены.
+        </div>
+      `;
+      return;
+    }
+
+    filteredClients.forEach(c => {
       const isSelected = state.activeClientId === c.id;
       const card = document.createElement('div');
       card.className = `client-item-card ${isSelected ? 'selected' : ''}`;
@@ -1343,7 +1713,9 @@
     state.activeClientId = Number(clientId);
     const client = state.clients.find(c => c.id === state.activeClientId);
     const cardRestrictions = document.getElementById('card-trainer-restrictions');
-    const inputRestrictions = document.getElementById('input-athlete-restrictions');
+    const textRestrictions = document.getElementById('text-athlete-restrictions');
+    const workoutBanner = document.getElementById('trainer-workout-restrictions-banner');
+    const workoutBannerText = document.getElementById('trainer-workout-restrictions-text');
 
     if (client) {
       el.trainerActiveClientName.textContent = client.full_name || client.username;
@@ -1351,32 +1723,118 @@
         el.trainerActiveClientAvatar.innerHTML = `<img src="${client.avatar_base64}" style="width:100%;height:100%;object-fit:cover;border-radius:9999px;">`;
       }
       el.trainerWorkoutNotice.style.display = 'none';
-      if (cardRestrictions && inputRestrictions) {
-        cardRestrictions.style.display = 'block';
-        inputRestrictions.value = client.restrictions || '';
+
+      const hasRestrictions = Boolean(client.restrictions && client.restrictions.trim());
+      if (cardRestrictions && textRestrictions) {
+        if (hasRestrictions) {
+          cardRestrictions.style.display = 'block';
+          textRestrictions.textContent = client.restrictions.trim();
+        } else {
+          cardRestrictions.style.display = 'none';
+        }
       }
+      if (workoutBanner && workoutBannerText) {
+        if (hasRestrictions) {
+          workoutBanner.style.display = 'block';
+          workoutBannerText.textContent = client.restrictions.trim();
+        } else {
+          workoutBanner.style.display = 'none';
+        }
+      }
+
       populateTrainerClientDropdown();
       renderTrainerClientsList();
       showToast(`Выбран подопечный: ${client.full_name || client.username}`, 'info');
     } else {
       if (cardRestrictions) cardRestrictions.style.display = 'none';
+      if (workoutBanner) workoutBanner.style.display = 'none';
     }
   }
 
   async function unpairTrainerClient(clientId) {
-    if (!confirm('Отвязать этого подопечного?')) return;
-    try {
-      await api('/api/trainer/unpair', {
-        method: 'POST',
-        body: JSON.stringify({ athleteId: clientId })
-      });
-      if (state.activeClientId === clientId) {
-        state.activeClientId = null;
-        el.trainerActiveClientName.textContent = 'Нет подопечных';
+    const id = Number(clientId);
+    const client = state.clients.find(c => c.id === id);
+    const clientName = client ? (client.full_name || client.username) : 'подопечного';
+
+    const hasTg = Boolean(state.user.telegram_id || state.user.telegram_username);
+    if (!hasTg) {
+      if (!confirm(`Отвязать подопечного ${clientName}? Повторная автоматическая привязка будет заблокирована на 24 часа.`)) return;
+      try {
+        showToast('Разрываем связь с подопечным...', 'info');
+        const res = await api('/api/trainer/unpair', {
+          method: 'POST',
+          body: JSON.stringify({ athleteId: id })
+        });
+
+        state.clients = state.clients.filter(c => c.id !== id);
+        if (state.activeClientId === id) {
+          state.activeClientId = null;
+          if (el.trainerActiveClientName) el.trainerActiveClientName.textContent = 'Нет подопечных';
+          if (el.trainerActiveClientAvatar) el.trainerActiveClientAvatar.innerHTML = '';
+          const cardRestrictions = document.getElementById('card-trainer-restrictions');
+          const workoutBanner = document.getElementById('trainer-workout-restrictions-banner');
+          if (cardRestrictions) cardRestrictions.style.display = 'none';
+          if (workoutBanner) workoutBanner.style.display = 'none';
+        }
+
+        renderTrainerClientsList();
+        populateTrainerClientDropdown();
+        showToast(res.message || 'Связь успешно разорвана.', 'success');
+        loadTrainerClients();
+      } catch (err) {
+        showToast(err.message || 'Ошибка отвязки подопечного', 'error');
       }
-      showToast('Связь разорвана', 'info');
-      loadTrainerClients();
-    } catch {}
+      return;
+    }
+
+    // Telegram linked: request OTP and show confirmation modal for safety
+    try {
+      showToast('Запрашиваем код подтверждения в Telegram...', 'info');
+      const res = await api('/api/trainer/unpair/request-otp', {
+        method: 'POST',
+        body: JSON.stringify({ athleteId: id })
+      });
+      showToast(res.message || 'Код отправлен в Telegram бот', 'success');
+
+      state.pendingUnpairAthleteId = id;
+      state.pendingUnpairAthleteName = clientName;
+
+      if (el.dialogUnpairTitle) el.dialogUnpairTitle.textContent = 'ОТВЯЗКА ПОДОПЕЧНОГО';
+      if (el.dialogUnpairDesc) {
+        el.dialogUnpairDesc.textContent = `Для безопасности удаление подопечного «${clientName}» требует подтверждения. Мы отправили 6-значный код в ваш Telegram бот.`;
+      }
+      if (el.unpairInputCode) el.unpairInputCode.value = '';
+
+      if (el.dialogUnpairConfirm) {
+        if (typeof el.dialogUnpairConfirm.showModal === 'function') {
+          try { el.dialogUnpairConfirm.showModal(); } catch (_) { el.dialogUnpairConfirm.setAttribute('open', ''); }
+        } else {
+          el.dialogUnpairConfirm.setAttribute('open', '');
+        }
+      }
+      if (el.unpairInputCode) setTimeout(() => el.unpairInputCode.focus(), 50);
+
+      // 5-minute countdown timer
+      let remaining = 300;
+      if (state.unpairTimerInterval) clearInterval(state.unpairTimerInterval);
+      const updateUnpairTimer = () => {
+        const m = Math.floor(remaining / 60);
+        const s = remaining % 60;
+        const mm = String(m).padStart(2, '0');
+        const ss = String(s).padStart(2, '0');
+        if (el.unpairTgTimerDisplay) el.unpairTgTimerDisplay.textContent = `⏱ Действует: ${mm}:${ss}`;
+        if (remaining <= 0) {
+          clearInterval(state.unpairTimerInterval);
+          el.dialogUnpairConfirm?.close();
+          showToast('Время действия кода истекло. Запросите заново.', 'error');
+        }
+        remaining--;
+      };
+      updateUnpairTimer();
+      state.unpairTimerInterval = setInterval(updateUnpairTimer, 1000);
+    } catch (err) {
+      showToast(err.message || 'Ошибка запроса кода в Telegram', 'error');
+    }
   }
 
   // --- TRAINER: Workout Assignment Logic ---
@@ -1413,6 +1871,9 @@
       return;
     }
 
+    const earliestMs = getEarliestSessionTimestamp(state.trainerSets);
+    const isAfterOneHour = earliestMs ? (Date.now() - earliestMs >= 60 * 60 * 1000) : false;
+
     const grouped = {};
     state.trainerSets.forEach(s => {
       const name = s.exercise_name || 'Упражнение';
@@ -1420,9 +1881,25 @@
       grouped[name].push(s);
     });
 
-    for (const [exName, sets] of Object.entries(grouped)) {
+    const groups = Object.entries(grouped).map(([exName, sets]) => {
+      const isCompleted = sets.length > 0 && sets.every(s => Boolean(s.is_completed));
+      const earliestId = Math.min(...sets.map(s => s.id || 0));
+      return { exName, sets, isCompleted, earliestId };
+    });
+
+    // Incomplete exercises go to TOP, completed go to BOTTOM
+    groups.sort((a, b) => {
+      if (a.isCompleted !== b.isCompleted) {
+        return a.isCompleted ? 1 : -1;
+      }
+      return a.earliestId - b.earliestId;
+    });
+
+    for (const group of groups) {
+      const { exName, sets, isCompleted } = group;
+      const shouldCollapse = isCompleted && isAfterOneHour;
       const card = document.createElement('div');
-      card.className = 'exercise-group-card';
+      card.className = `exercise-group-card ${isCompleted ? 'completed-card' : ''} ${shouldCollapse ? 'collapsed' : ''}`;
 
       let setsHtml = '';
       sets.forEach((set, idx) => {
@@ -1430,21 +1907,86 @@
         setsHtml += `
           <div class="set-row">
             <span class="set-num">${idx + 1}</span>
-            <span class="set-weight-reps">${set.weight_kg} кг × ${set.reps} повт</span>
-            <span class="set-rpe-badge">RPE ${set.rpe || 8}</span>
+            <div class="set-inputs-row">
+              <input type="number" step="0.5" min="0" class="set-input-mini input-trainer-set-weight" data-id="${set.id}" value="${set.weight_kg}" title="Вес (кг)">
+              <span style="color:var(--text-muted);font-size:11px;">кг ×</span>
+              <input type="number" step="1" min="1" class="set-input-mini input-trainer-set-reps" data-id="${set.id}" value="${set.reps}" title="Повторения">
+              <span style="color:var(--text-muted);font-size:11px;">повт</span>
+            </div>
             <span class="status-pill ${isComp ? 'done' : 'pending'}">${isComp ? 'Сделано' : 'Назначено'}</span>
-            <button class="set-delete-btn" data-id="${set.id}" title="Удалить">✕</button>
+            <button class="set-delete-btn" data-id="${set.id}" title="Удалить подход">✕</button>
           </div>
         `;
       });
 
       card.innerHTML = `
         <div class="exercise-group-title">
-          <span>${escapeHtml(exName)}</span>
-          <span style="font-size: 11px; color: var(--text-muted);">${sets.length} подходов</span>
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <span>${escapeHtml(exName)}</span>
+            ${isCompleted ? '<span class="status-pill done" style="font-size:10px; padding:2px 6px;">✓ Завершено</span>' : ''}
+          </div>
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <span style="font-size: 11px; color: var(--text-muted);">${sets.length} подходов</span>
+            <button type="button" class="collapse-toggle-btn" title="Свернуть/Развернуть">
+              ${shouldCollapse ? '▶ Развернуть' : '▼ Свернуть'}
+            </button>
+          </div>
         </div>
         <div class="sets-table">${setsHtml}</div>
+        <div class="exercise-card-actions">
+          <button type="button" class="btn-action-pill btn-action-primary btn-add-set-to-exercise" data-name="${escapeHtml(exName)}" data-last-weight="${sets.length > 0 ? sets[sets.length - 1].weight_kg : 20}" data-last-reps="${sets.length > 0 ? sets[sets.length - 1].reps : 10}">
+            ➕ + ПОДХОД
+          </button>
+          <button type="button" class="btn-action-pill btn-action-cyan btn-view-exercise-stats" data-name="${escapeHtml(exName)}">
+            📊 СТАТИСТИКА
+          </button>
+        </div>
       `;
+
+      const toggleBtn = card.querySelector('.collapse-toggle-btn');
+      if (toggleBtn) {
+        toggleBtn.onclick = (e) => {
+          e.stopPropagation();
+          card.classList.toggle('collapsed');
+          const isNowCollapsed = card.classList.contains('collapsed');
+          toggleBtn.textContent = isNowCollapsed ? '▶ Развернуть' : '▼ Свернуть';
+        };
+      }
+
+      // Add set to this specific exercise
+      const addSetBtn = card.querySelector('.btn-add-set-to-exercise');
+      if (addSetBtn) {
+        addSetBtn.onclick = () => {
+          openQuickAddSetDialog(exName, Number(addSetBtn.dataset.lastWeight) || 20, Number(addSetBtn.dataset.lastReps) || 10, 'trainer');
+        };
+      }
+
+      // View exercise history stats dialog
+      const statsBtn = card.querySelector('.btn-view-exercise-stats');
+      if (statsBtn) {
+        statsBtn.onclick = () => {
+          openExerciseStatsDialog(exName, state.activeClientId, state.trainerDate);
+        };
+      }
+
+      // Trainer set input change handler (auto-save)
+      card.querySelectorAll('.input-trainer-set-weight, .input-trainer-set-reps').forEach(inp => {
+        inp.onchange = async () => {
+          const setId = inp.dataset.id;
+          const row = inp.closest('.set-row');
+          const weightKg = parseFloat(row.querySelector('.input-trainer-set-weight').value) || 0;
+          const reps = parseInt(row.querySelector('.input-trainer-set-reps').value, 10) || 1;
+          try {
+            await api('/api/workout/set', {
+              method: 'PUT',
+              body: JSON.stringify({ setId, weightKg, reps })
+            });
+            showToast('Подход обновлен', 'info');
+          } catch (err) {
+            showToast('Ошибка сохранения', 'error');
+          }
+        };
+      });
 
       card.querySelectorAll('.set-delete-btn').forEach(btn => {
         btn.onclick = async () => {
@@ -1571,7 +2113,7 @@
       item.innerHTML = `
         <div>
           <div style="font-weight: 700; font-size: 14px; color: var(--text-primary);">${escapeHtml(s.exercise_name)}</div>
-          <div style="font-size: 11px; color: var(--text-muted);">${s.date || state.trainerDate} · RPE ${s.rpe || 8}</div>
+          <div style="font-size: 11px; color: var(--text-muted);">${s.date || state.trainerDate}</div>
         </div>
         <div style="text-align: right;">
           <div style="font-weight: 800; color: var(--accent-lime); font-size: 14px;">${s.weight_kg} кг × ${s.reps}</div>
@@ -1599,6 +2141,158 @@
 
     // Telegram and 2FA status
     renderTelegramAnd2FAStatus('trainer');
+
+    // Load exercises catalog
+    loadTrainerExercisesCatalog();
+  }
+
+  // --- TRAINER: Exercises Catalog CRUD (Mobile Parity) ---
+  async function loadTrainerExercisesCatalog() {
+    try {
+      const res = await api('/api/exercises');
+      state.customExercises = Array.isArray(res.exercises) ? res.exercises : [];
+      renderTrainerExercisesCatalog();
+    } catch (err) {
+      console.warn('Failed to load exercises catalog:', err);
+    }
+  }
+
+  function renderTrainerExercisesCatalog() {
+    if (!el.trainerCatalogList) return;
+
+    const query = (state.catalogSearchQuery || '').trim().toLowerCase();
+    const group = state.catalogSelectedGroup || 'Все';
+
+    // Dynamic Muscle Groups calculation from existing exercises
+    const existingGroups = Array.from(new Set(state.customExercises.map(e => e.muscleGroup).filter(Boolean)));
+    if (el.trainerCatalogGroupChips) {
+      if (existingGroups.length > 0) {
+        el.trainerCatalogGroupChips.style.display = 'flex';
+        const allGroups = ['Все', ...existingGroups];
+        el.trainerCatalogGroupChips.innerHTML = allGroups.map(grp => `
+          <button type="button" class="chip-pill ${grp === group ? 'active' : ''}" data-group="${escapeHtml(grp)}">
+            ${escapeHtml(grp)}
+          </button>
+        `).join('');
+
+        el.trainerCatalogGroupChips.querySelectorAll('.chip-pill').forEach(chip => {
+          chip.onclick = () => {
+            el.trainerCatalogGroupChips.querySelectorAll('.chip-pill').forEach(c => c.classList.remove('active'));
+            chip.classList.add('active');
+            state.catalogSelectedGroup = chip.dataset.group;
+            renderTrainerExercisesCatalog();
+          };
+        });
+      } else {
+        el.trainerCatalogGroupChips.style.display = 'none';
+        state.catalogSelectedGroup = 'Все';
+      }
+    }
+
+    const filtered = state.customExercises.filter(ex => {
+      const matchesGroup = (group === 'Все') || (ex.muscleGroup === group);
+      const matchesQuery = !query || ex.name.toLowerCase().includes(query) || (ex.muscleGroup && ex.muscleGroup.toLowerCase().includes(query));
+      return matchesGroup && matchesQuery;
+    });
+
+    if (el.trainerCatalogTitle) {
+      el.trainerCatalogTitle.textContent = `КАТАЛОГ УПРАЖНЕНИЙ (${filtered.length}/${state.customExercises.length})`;
+    }
+
+    if (filtered.length === 0) {
+      el.trainerCatalogList.innerHTML = `
+        <div style="font-size: 12px; color: var(--text-muted); text-align: center; padding: 22px 14px; background: rgba(255,255,255,0.02); border-radius: 8px; border: 1px dashed var(--border-subtle);">
+          Упражнения не найдены. Нажмите «➕ Добавить упражнение» выше.
+        </div>
+      `;
+      return;
+    }
+
+    el.trainerCatalogList.innerHTML = filtered.map(ex => `
+      <div class="catalog-exercise-card" data-id="${ex.id}">
+        <div class="catalog-exercise-info">
+          <div class="catalog-exercise-name">${escapeHtml(ex.name)}</div>
+          <div class="catalog-exercise-meta">${escapeHtml(ex.muscleGroup || 'Грудь')} • Отдых ${ex.defaultRestSeconds || 90}с</div>
+        </div>
+        <div class="catalog-exercise-actions">
+          <button type="button" class="btn-icon-sm btn-edit-action btn-edit-ex" title="Редактировать" data-id="${ex.id}">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
+              <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
+            </svg>
+            <span>Редактировать</span>
+          </button>
+          <button type="button" class="btn-icon-sm btn-danger btn-del-ex" title="Удалить" data-id="${ex.id}">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="3 6 5 6 21 6"></polyline>
+              <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+            </svg>
+            <span>Удалить</span>
+          </button>
+        </div>
+      </div>
+    `).join('');
+
+    // Attach Edit handlers
+    el.trainerCatalogList.querySelectorAll('.btn-edit-ex').forEach(btn => {
+      btn.onclick = () => {
+        const id = Number(btn.dataset.id);
+        const ex = state.customExercises.find(e => e.id === id);
+        if (ex) openEditExerciseModal(ex);
+      };
+    });
+
+    // Attach Delete handlers
+    el.trainerCatalogList.querySelectorAll('.btn-del-ex').forEach(btn => {
+      btn.onclick = async () => {
+        const id = Number(btn.dataset.id);
+        const ex = state.customExercises.find(e => e.id === id);
+        const name = ex ? ex.name : 'упражнение';
+        if (!confirm(`Удалить упражнение «${name}» из каталога?`)) return;
+
+        try {
+          await api(`/api/exercises/${id}`, { method: 'DELETE' });
+          showToast(`Упражнение «${name}» удалено`, 'success');
+          loadTrainerExercisesCatalog();
+        } catch (err) {
+          showToast(err.message || 'Ошибка удаления упражнения', 'error');
+        }
+      };
+    });
+  }
+
+  function openEditExerciseModal(exercise = null) {
+    const dlg = el.dialogEditExercise || document.getElementById('dialog-edit-exercise');
+    if (!dlg) {
+      console.error('Modal dialog-edit-exercise not found in DOM');
+      return;
+    }
+    const titleEl = el.dialogEditExerciseTitle || document.getElementById('dialog-edit-exercise-title');
+    const idEl = el.editExerciseId || document.getElementById('edit-exercise-id');
+    const nameEl = el.editExerciseName || document.getElementById('edit-exercise-name');
+    const groupEl = el.editExerciseGroup || document.getElementById('edit-exercise-group');
+    const restEl = el.editExerciseRest || document.getElementById('edit-exercise-rest');
+
+    if (exercise) {
+      if (titleEl) titleEl.textContent = 'Редактировать упражнение';
+      if (idEl) idEl.value = exercise.id;
+      if (nameEl) nameEl.value = exercise.name;
+      if (groupEl) groupEl.value = exercise.muscleGroup || 'Грудь';
+      if (restEl) restEl.value = exercise.defaultRestSeconds || 90;
+    } else {
+      if (titleEl) titleEl.textContent = 'Новое упражнение';
+      if (idEl) idEl.value = '';
+      if (nameEl) nameEl.value = '';
+      if (groupEl) groupEl.value = 'Грудь';
+      if (restEl) restEl.value = 90;
+    }
+
+    if (typeof dlg.showModal === 'function') {
+      try { dlg.showModal(); } catch (_) { dlg.setAttribute('open', ''); }
+    } else {
+      dlg.setAttribute('open', '');
+    }
+    if (nameEl) setTimeout(() => nameEl.focus(), 50);
   }
 
   // --- Event Listeners Setup ---
@@ -1622,27 +2316,30 @@
       el.formLogin.style.display = 'none';
     };
 
-    // Role selector card toggles
-    document.querySelectorAll('.role-card').forEach(card => {
-      card.onclick = () => {
-        document.querySelectorAll('.role-card').forEach(c => c.classList.remove('selected'));
-        card.classList.add('selected');
-        const radio = card.querySelector('input[type="radio"]');
-        if (radio) radio.checked = true;
-      };
+    // Role selector card toggles (scope within their form / group)
+    document.querySelectorAll('.role-selector-cards').forEach(container => {
+      container.querySelectorAll('.role-card').forEach(card => {
+        card.onclick = () => {
+          container.querySelectorAll('.role-card').forEach(c => c.classList.remove('selected'));
+          card.classList.add('selected');
+          const radio = card.querySelector('input[type="radio"]');
+          if (radio) radio.checked = true;
+        };
+      });
     });
 
-    // Login Form Submit (with 2FA support)
+    // Login Form Submit (with role and 2FA support)
     el.formLogin.onsubmit = async (e) => {
       e.preventDefault();
       const username = el.loginUsername.value.trim();
       const password = el.loginPassword.value;
+      const role = document.querySelector('input[name="login-role"]:checked')?.value || 'athlete';
       if (!username || !password) return;
 
       try {
         const data = await api('/api/login', {
           method: 'POST',
-          body: JSON.stringify({ username, password })
+          body: JSON.stringify({ username, password, role })
         });
 
         if (data.require2FA) {
@@ -1653,7 +2350,7 @@
         }
 
         state.user = data.user;
-        saveAuthToken(data.token);
+        saveAuthToken(data.token, data.user);
         setupAppForRole(data.user.role);
         showToast(`Добро пожаловать, ${data.user.fullName || data.user.username}!`, 'success');
       } catch {}
@@ -1700,7 +2397,7 @@
           if (state.login2faTimerInterval) clearInterval(state.login2faTimerInterval);
           el.dialog2faVerify?.close();
           state.user = data.user;
-          saveAuthToken(data.token);
+          saveAuthToken(data.token, data.user);
           setupAppForRole(data.user.role);
           showToast(`Вход выполнен: ${data.user.fullName || data.user.username}!`, 'success');
         } catch {}
@@ -1951,7 +2648,7 @@
         }
 
         state.user = data.user;
-        saveAuthToken(data.token);
+        saveAuthToken(data.token, data.user);
         setupAppForRole(data.user.role);
         showToast('Аккаунт атлета успешно создан!', 'success');
       } catch {} finally {
@@ -1988,11 +2685,91 @@
             state.tgSessionPollInterval = null;
             state.token = res.token;
             state.user = res.user;
-            saveAuthToken(res.token);
+            saveAuthToken(res.token, res.user);
             resetTgAuthModal();
             el.dialogTelegramAuth?.close();
             setupAppForRole(res.user.role);
             showToast(`Вход выполнен в 1 клик: ${res.user.fullName || res.user.username}!`, 'success');
+          } else if (res.status === 'REQUIRES_2FA' && res.userId) {
+            clearInterval(state.tgSessionPollInterval);
+            state.tgSessionPollInterval = null;
+            resetTgAuthModal();
+            el.dialogTelegramAuth?.close();
+            state.pending2FAUserId = res.userId;
+            open2FALoginModal(res.expiresInSeconds || 300);
+            showToast(res.message || 'Включена 2FA аутентификация: вход в 1 клик заблокирован политикой безопасности. Введите 6-значный код из Telegram', 'info');
+          } else if (res.status === 'PENDING_APPROVAL') {
+            clearInterval(state.tgSessionPollInterval);
+            state.tgSessionPollInterval = null;
+            resetTgAuthModal();
+            el.dialogTelegramAuth?.close();
+
+            let pendingBox = document.getElementById('register-pending-notice');
+            if (!pendingBox) {
+              pendingBox = document.createElement('div');
+              pendingBox.id = 'register-pending-notice';
+              pendingBox.className = 'pending-approval-box';
+              el.formRegister.parentNode.insertBefore(pendingBox, el.formRegister.nextSibling);
+            }
+            el.formRegister.style.display = 'none';
+            el.formLogin.style.display = 'none';
+            pendingBox.style.display = 'block';
+
+            pendingBox.innerHTML = `
+              <div class="pending-approval-title" id="trainer-approval-status-title">⏳ ЗАЯВКА НА РАССМОТРЕНИИ</div>
+              <p class="pending-approval-text" id="trainer-approval-status-desc">
+                Ваша заявка на создание аккаунта тренера принята!
+              </p>
+              <p class="pending-approval-text" id="trainer-approval-subtext" style="font-size: 12px; margin-top: 8px;">
+                В течение 72 часов ваша заявка будет обработана, мы свяжемся если будет необходима дополнительная информация.
+              </p>
+              <div class="owners-links-row" style="margin-top: 10px;">
+                <a href="https://t.me/SantiLA213" target="_blank" class="owner-chip">💬 @SantiLA213</a>
+                <a href="https://t.me/Spirit5449" target="_blank" class="owner-chip">💬 @Spirit5449</a>
+              </div>
+              <div id="trainer-approved-actions" style="display: none; margin-top: 14px;">
+                <button type="button" class="app-btn btn-primary" id="btn-approved-login" style="width: 100%;">
+                  👉 Войти в аккаунт тренера
+                </button>
+              </div>
+            `;
+            showToast('Заявка на аккаунт тренера отправлена на рассмотрение (до 72 ч)!', 'info');
+
+            // Poll for approval
+            const checkUsername = res.username;
+            if (checkUsername) {
+              if (state.trainerApprovalPoll) clearInterval(state.trainerApprovalPoll);
+              state.trainerApprovalPoll = setInterval(async () => {
+                try {
+                  const statusRes = await api(`/api/auth/trainer-status?username=${encodeURIComponent(checkUsername)}`);
+                  if (statusRes && statusRes.isApproved) {
+                    clearInterval(state.trainerApprovalPoll);
+                    const titleEl = document.getElementById('trainer-approval-status-title');
+                    const descEl = document.getElementById('trainer-approval-status-desc');
+                    const actionsEl = document.getElementById('trainer-approved-actions');
+                    const loginBtn = document.getElementById('btn-approved-login');
+                    if (titleEl) {
+                      titleEl.textContent = '✅ ВАША ЗАЯВКА ОДОБРЕНА!';
+                      titleEl.style.color = 'var(--accent-emerald)';
+                    }
+                    if (descEl) {
+                      descEl.textContent = `Поздравляем! Ваш аккаунт тренера (@${checkUsername}) успешно подтвержден.`;
+                      descEl.style.color = '#fff';
+                    }
+                    if (actionsEl) actionsEl.style.display = 'block';
+                    if (loginBtn) {
+                      loginBtn.onclick = () => {
+                        pendingBox.style.display = 'none';
+                        el.tabLogin.click();
+                        el.loginUsername.value = checkUsername;
+                        el.loginPassword.focus();
+                      };
+                    }
+                    showToast('🎉 Ваша заявка тренера одобрена!', 'success');
+                  }
+                } catch (_) {}
+              }, 2500);
+            }
           } else if (res.status === 'EXPIRED') {
             clearInterval(state.tgSessionPollInterval);
             state.tgSessionPollInterval = null;
@@ -2040,39 +2817,77 @@
             });
             state.token = data.token;
             state.user = data.user;
-            saveAuthToken(data.token);
+            saveAuthToken(data.token, data.user);
             setupAppForRole(data.user.role);
             showToast(`Вход выполнен: ${data.user.fullName || data.user.username}!`, 'success');
             return;
           } catch (_) {}
         }
 
-        // Initialize 1-click session
+        // Initialize 1-click session with chosen role
         resetTgAuthModal();
         if (el.dialogTelegramAuth) {
           el.dialogTelegramAuth.showModal();
         }
 
-        try {
-          const res = await api('/api/auth/telegram/session-init', { method: 'POST' });
-          if (res.sessionId && res.botUrl) {
-            state.tgSessionId = res.sessionId;
-            if (el.btnTgOneclickOpen) {
-              el.btnTgOneclickOpen.href = res.botUrl;
-              el.btnTgOneclickOpen.onclick = (e) => {
-                // Ensure link opens in telegram app/browser
-                window.open(res.botUrl, '_blank');
-              };
-            }
-            if (res.qrSvg && el.tgOneclickQrSvg && el.tgOneclickQrContainer) {
-              el.tgOneclickQrSvg.innerHTML = res.qrSvg;
-              el.tgOneclickQrContainer.style.display = 'block';
-            }
-            startOneClickPolling(res.sessionId);
+        async function initTgSessionForRole(chosenRole) {
+          if (state.tgSessionPollInterval) {
+            clearInterval(state.tgSessionPollInterval);
+            state.tgSessionPollInterval = null;
           }
-        } catch (_) {
-          showToast('Не удалось инициализировать сессию входа. Используйте ручной ввод.', 'error');
+          if (el.tgOneclickStatusText) {
+            el.tgOneclickStatusText.textContent = 'Ожидание перехода в Telegram...';
+          }
+
+          try {
+            const res = await api('/api/auth/telegram/session-init', {
+              method: 'POST',
+              body: JSON.stringify({ requestedRole: chosenRole })
+            });
+            if (res.sessionId && res.botUrl) {
+              state.tgSessionId = res.sessionId;
+              if (el.btnTgOneclickOpen) {
+                el.btnTgOneclickOpen.href = res.botUrl;
+                el.btnTgOneclickOpen.onclick = () => {
+                  window.open(res.botUrl, '_blank');
+                };
+              }
+              startOneClickPolling(res.sessionId);
+            }
+          } catch (_) {
+            showToast('Не удалось инициализировать сессию входа. Используйте ручной ввод.', 'error');
+          }
         }
+
+        // Get currently selected role
+        const currentRole = document.querySelector('input[name="tg-auth-role"]:checked')?.value || 'athlete';
+        initTgSessionForRole(currentRole);
+
+        // Listen for role changes in modal (both radio input change and card click)
+        document.querySelectorAll('[data-tg-role]').forEach(card => {
+          card.onclick = (e) => {
+            const role = card.getAttribute('data-tg-role');
+            const radio = card.querySelector('input[type="radio"]');
+            if (radio && !radio.checked) {
+              radio.checked = true;
+            }
+            document.querySelectorAll('[data-tg-role]').forEach(c => {
+              c.classList.toggle('selected', c.getAttribute('data-tg-role') === role);
+            });
+            initTgSessionForRole(role);
+          };
+        });
+
+        document.querySelectorAll('input[name="tg-auth-role"]').forEach(radio => {
+          radio.onchange = (e) => {
+            e.stopPropagation();
+            const role = radio.value;
+            document.querySelectorAll('[data-tg-role]').forEach(card => {
+              card.classList.toggle('selected', card.getAttribute('data-tg-role') === role);
+            });
+            initTgSessionForRole(role);
+          };
+        });
       };
     }
 
@@ -2183,7 +2998,7 @@
           if (!res.isNewUser && res.token) {
             // Existing user logged in
             state.user = res.user;
-            saveAuthToken(res.token);
+            saveAuthToken(res.token, res.user);
             el.dialogTelegramAuth?.close();
             setupAppForRole(res.user.role);
             showToast(`С возвращением, ${res.user.fullName || res.user.username}!`, 'success');
@@ -2223,8 +3038,80 @@
             })
           });
 
+          if (res.pendingApproval) {
+            el.dialogTelegramAuth?.close();
+            resetTgAuthModal();
+
+            let pendingBox = document.getElementById('register-pending-notice');
+            if (!pendingBox) {
+              pendingBox = document.createElement('div');
+              pendingBox.id = 'register-pending-notice';
+              pendingBox.className = 'pending-approval-box';
+              el.formRegister.parentNode.insertBefore(pendingBox, el.formRegister.nextSibling);
+            }
+            el.formRegister.style.display = 'none';
+            el.formLogin.style.display = 'none';
+            pendingBox.style.display = 'block';
+
+            pendingBox.innerHTML = `
+              <div class="pending-approval-title" id="trainer-approval-status-title">⏳ ЗАЯВКА НА РАССМОТРЕНИИ</div>
+              <p class="pending-approval-text" id="trainer-approval-status-desc">
+                Ваша заявка на создание аккаунта тренера принята!
+              </p>
+              <p class="pending-approval-text" id="trainer-approval-subtext" style="font-size: 12px; margin-top: 8px;">
+                В течение 72 часов ваша заявка будет обработана, мы свяжемся если будет необходима дополнительная информация.
+              </p>
+              <div class="owners-links-row" style="margin-top: 10px;">
+                <a href="https://t.me/SantiLA213" target="_blank" class="owner-chip">💬 @SantiLA213</a>
+                <a href="https://t.me/Spirit5449" target="_blank" class="owner-chip">💬 @Spirit5449</a>
+              </div>
+              <div id="trainer-approved-actions" style="display: none; margin-top: 14px;">
+                <button type="button" class="app-btn btn-primary" id="btn-approved-login" style="width: 100%;">
+                  👉 Войти в аккаунт тренера
+                </button>
+              </div>
+            `;
+            showToast('Заявка на аккаунт тренера отправлена (до 72 ч)!', 'info');
+
+            const checkUsername = res.username || state.tgPendingUsername;
+            if (checkUsername) {
+              if (state.trainerApprovalPoll) clearInterval(state.trainerApprovalPoll);
+              state.trainerApprovalPoll = setInterval(async () => {
+                try {
+                  const statusRes = await api(`/api/auth/trainer-status?username=${encodeURIComponent(checkUsername)}`);
+                  if (statusRes && statusRes.isApproved) {
+                    clearInterval(state.trainerApprovalPoll);
+                    const titleEl = document.getElementById('trainer-approval-status-title');
+                    const descEl = document.getElementById('trainer-approval-status-desc');
+                    const actionsEl = document.getElementById('trainer-approved-actions');
+                    const loginBtn = document.getElementById('btn-approved-login');
+                    if (titleEl) {
+                      titleEl.textContent = '✅ ВАША ЗАЯВКА ОДОБРЕНА!';
+                      titleEl.style.color = 'var(--accent-emerald)';
+                    }
+                    if (descEl) {
+                      descEl.textContent = `Поздравляем! Ваш аккаунт тренера (@${checkUsername}) успешно подтвержден.`;
+                      descEl.style.color = '#fff';
+                    }
+                    if (actionsEl) actionsEl.style.display = 'block';
+                    if (loginBtn) {
+                      loginBtn.onclick = () => {
+                        pendingBox.style.display = 'none';
+                        el.tabLogin.click();
+                        el.loginUsername.value = checkUsername;
+                        el.loginPassword.focus();
+                      };
+                    }
+                    showToast('🎉 Ваша заявка тренера одобрена!', 'success');
+                  }
+                } catch (_) {}
+              }, 2500);
+            }
+            return;
+          }
+
           state.user = res.user;
-          saveAuthToken(res.token);
+          saveAuthToken(res.token, res.user);
           el.dialogTelegramAuth?.close();
           setupAppForRole(res.user.role);
           showToast(`Добро пожаловать в Fitness Pro, ${res.user.fullName}!`, 'success');
@@ -2256,7 +3143,6 @@
       const exerciseName = el.athleteInputExercise.value.trim();
       const weightKg = parseFloat(el.athleteInputWeight.value) || 0;
       const reps = parseInt(el.athleteInputReps.value, 10) || 1;
-      const rpe = parseFloat(el.athleteInputRpe.value) || 8.0;
 
       try {
         await api('/api/workout/set', {
@@ -2265,8 +3151,7 @@
             date: state.currentDate,
             exerciseName,
             weightKg,
-            reps,
-            rpe
+            reps
           })
         });
         showToast('Подход добавлен', 'success');
@@ -2297,12 +3182,15 @@
       el.btnSaveAthleteProfile.onclick = async () => {
         const fullName = el.athleteEditName.value.trim();
         const phone = el.athleteEditPhone.value.trim();
+        const restrictions = el.athleteEditRestrictions ? el.athleteEditRestrictions.value.trim() : '';
         try {
           const res = await api('/api/user/profile', {
             method: 'POST',
             body: JSON.stringify({
               fullName,
               phone,
+              restrictions,
+              clientUuid: state.user.client_uuid || state.user.clientUuid || '',
               avatarBase64: state.athleteAvatarBase64 || state.user.avatar_base64 || ''
             })
           });
@@ -2333,7 +3221,6 @@
       const exerciseName = el.trainerInputExercise.value.trim();
       const weightKg = parseFloat(el.trainerInputWeight.value) || 0;
       const reps = parseInt(el.trainerInputReps.value, 10) || 1;
-      const rpe = parseFloat(el.trainerInputRpe.value) || 8.0;
       const isSelfAllowed = Boolean(el.trainerAllowSelfWorkout?.checked);
 
       try {
@@ -2348,33 +3235,240 @@
         });
         showToast('Упражнение назначено подопечному', 'success');
         loadTrainerWorkoutSets();
+        if (el.trainerExerciseSearchResults) el.trainerExerciseSearchResults.style.display = 'none';
         el.trainerInputReps.focus();
       } catch {}
     };
 
-    // Trainer Athlete Restrictions Form
-    const formRestrictions = document.getElementById('form-trainer-restrictions');
-    if (formRestrictions) {
-      formRestrictions.onsubmit = async (evt) => {
-        evt.preventDefault();
-        if (!state.activeClientId) {
-          showToast('Подопечный не выбран', 'error');
+    // Trainer Searchable Exercise Catalog (Dynamic CRUD from DB, zero hardcoded stock exercises)
+    if (el.trainerInputExercise && el.trainerExerciseSearchResults) {
+      async function renderTrainerSearchResults(query = '') {
+        // Ensure catalog is loaded
+        if (state.customExercises.length === 0) {
+          try {
+            const res = await api('/api/exercises');
+            state.customExercises = Array.isArray(res.exercises) ? res.exercises : [];
+          } catch (_) {}
+        }
+
+        const q = query.trim().toLowerCase();
+        const matches = state.customExercises.filter(item =>
+          !q || item.name.toLowerCase().includes(q) || (item.muscleGroup && item.muscleGroup.toLowerCase().includes(q))
+        );
+
+        if (matches.length === 0) {
+          el.trainerExerciseSearchResults.innerHTML = `
+            <div style="padding: 10px 14px; font-size: 12px; color: var(--text-muted);">
+              ${q ? `Своё упражнение: <strong>${escapeHtml(query)}</strong>` : 'Каталог пуст. Добавьте упражнения в Настройках.'}
+            </div>
+          `;
+          el.trainerExerciseSearchResults.style.display = 'block';
           return;
         }
-        const restrictions = document.getElementById('input-athlete-restrictions').value;
+
+        el.trainerExerciseSearchResults.innerHTML = matches.map(item => `
+          <div class="exercise-search-item" data-name="${escapeHtml(item.name)}">
+            <span class="exercise-search-name">${escapeHtml(item.name)}</span>
+            <span class="exercise-search-category">${escapeHtml(item.muscleGroup || '')}</span>
+          </div>
+        `).join('');
+        el.trainerExerciseSearchResults.style.display = 'block';
+
+        el.trainerExerciseSearchResults.querySelectorAll('.exercise-search-item').forEach(item => {
+          item.onclick = () => {
+            el.trainerInputExercise.value = item.dataset.name;
+            el.trainerExerciseSearchResults.style.display = 'none';
+            if (el.trainerInputWeight) el.trainerInputWeight.focus();
+          };
+        });
+      }
+
+      el.trainerInputExercise.addEventListener('focus', () => {
+        renderTrainerSearchResults(el.trainerInputExercise.value);
+      });
+
+      el.trainerInputExercise.addEventListener('input', (e) => {
+        renderTrainerSearchResults(e.target.value);
+      });
+
+      document.addEventListener('click', (e) => {
+        if (!el.trainerInputExercise.contains(e.target) && !el.trainerExerciseSearchResults.contains(e.target)) {
+          el.trainerExerciseSearchResults.style.display = 'none';
+        }
+      });
+    }
+
+    // Modal: Quick Add Set Dialog for specific exercise
+    const dialogAddSet = document.getElementById('dialog-add-set');
+    const formQuickAddSet = document.getElementById('form-quick-add-set');
+    const quickExNameInput = document.getElementById('quick-add-set-exercise-name');
+    const quickWeightInput = document.getElementById('quick-add-set-weight');
+    const quickRepsInput = document.getElementById('quick-add-set-reps');
+    const addSetTitle = document.getElementById('add-set-dialog-title');
+    let quickAddRole = 'trainer';
+
+    window.openQuickAddSetDialog = function(exerciseName, lastWeight, lastReps, role = 'trainer') {
+      quickAddRole = role;
+      if (addSetTitle) addSetTitle.textContent = `+ Подход: ${exerciseName}`;
+      if (quickExNameInput) quickExNameInput.value = exerciseName;
+      if (quickWeightInput) quickWeightInput.value = lastWeight || 20;
+      if (quickRepsInput) quickRepsInput.value = lastReps || 10;
+      if (dialogAddSet) {
+        if (typeof dialogAddSet.showModal === 'function') dialogAddSet.showModal();
+        else dialogAddSet.style.display = 'block';
+        if (quickWeightInput) quickWeightInput.focus();
+      }
+    };
+
+    if (formQuickAddSet) {
+      formQuickAddSet.onsubmit = async (evt) => {
+        evt.preventDefault();
+        const exerciseName = quickExNameInput.value.trim();
+        const weightKg = parseFloat(quickWeightInput.value) || 0;
+        const reps = parseInt(quickRepsInput.value, 10) || 1;
+        if (!exerciseName) return;
+
         try {
-          await api('/api/trainer/athlete-restrictions', {
-            method: 'POST',
-            body: JSON.stringify({ athleteId: state.activeClientId, restrictions })
-          });
-          const client = state.clients.find(c => c.id === state.activeClientId);
-          if (client) client.restrictions = restrictions;
-          showToast('Ограничения и травмы атлета сохранены', 'success');
+          if (quickAddRole === 'trainer') {
+            if (!state.activeClientId) {
+              showToast('Подопечный не выбран', 'error');
+              return;
+            }
+            await api('/api/workout/set', {
+              method: 'POST',
+              body: JSON.stringify({
+                athleteId: state.activeClientId,
+                date: state.trainerDate,
+                exerciseName,
+                weightKg,
+                reps
+              })
+            });
+            showToast('Подход добавлен', 'success');
+            loadTrainerWorkoutSets();
+          } else {
+            await api('/api/workout/set', {
+              method: 'POST',
+              body: JSON.stringify({
+                date: state.athleteDate,
+                exerciseName,
+                weightKg,
+                reps
+              })
+            });
+            showToast('Подход добавлен', 'success');
+            loadAthleteWorkoutSets();
+          }
+          if (dialogAddSet) {
+            if (typeof dialogAddSet.close === 'function') dialogAddSet.close();
+            else dialogAddSet.style.display = 'none';
+          }
         } catch (err) {
-          showToast(err.message || 'Ошибка сохранения', 'error');
+          showToast(err.message || 'Ошибка добавления подхода', 'error');
         }
       };
     }
+
+    const btnCloseAddSet = document.getElementById('btn-close-add-set-dialog');
+    const btnCancelAddSet = document.getElementById('btn-cancel-quick-add-set');
+    [btnCloseAddSet, btnCancelAddSet].forEach(btn => {
+      if (btn) {
+        btn.onclick = () => {
+          if (dialogAddSet) {
+            if (typeof dialogAddSet.close === 'function') dialogAddSet.close();
+            else dialogAddSet.style.display = 'none';
+          }
+        };
+      }
+    });
+
+    // Modal: Exercise History & Statistics Dialog (Mobile Parity)
+    const dialogHistory = document.getElementById('dialog-exercise-history');
+    const historyTitle = document.getElementById('exercise-history-dialog-title');
+    const historyBody = document.getElementById('exercise-history-modal-body');
+
+    window.openExerciseStatsDialog = async function(exerciseName, athleteId, currentDate) {
+      if (historyTitle) historyTitle.textContent = `Статистика: ${exerciseName}`;
+      if (historyBody) historyBody.innerHTML = '<div style="text-align:center;padding:20px;color:var(--text-muted);">Загрузка истории...</div>';
+      if (dialogHistory) {
+        if (typeof dialogHistory.showModal === 'function') dialogHistory.showModal();
+        else dialogHistory.style.display = 'block';
+      }
+
+      try {
+        const queryParams = new URLSearchParams({
+          exercise: exerciseName,
+          athleteId: athleteId || (state.user?.id || 1)
+        });
+        if (currentDate) queryParams.set('beforeDate', currentDate);
+
+        const res = await api(`/api/trainer/exercise-history?${queryParams.toString()}`);
+        const summary = res.stats;
+
+        if (!summary || !summary.lastDate) {
+          if (historyBody) {
+            historyBody.innerHTML = `
+              <div style="text-align: center; padding: 24px 12px; color: var(--text-muted); font-size: 13px;">
+                Ранее история выполнения этого упражнения для данного подопечного не найдена.
+              </div>
+            `;
+          }
+          return;
+        }
+
+        const setsListHtml = (summary.sets || []).map((s, idx) => `
+          <div class="exercise-stats-set-item">
+            <span style="font-weight: 500;">Подход ${idx + 1}</span>
+            <span style="font-weight: 700; color: var(--accent-lime); font-family: monospace;">
+              ${s.weight_kg} кг × ${s.reps} повт.
+            </span>
+          </div>
+        `).join('');
+
+        if (historyBody) {
+          historyBody.innerHTML = `
+            <div class="exercise-stats-box">
+              <div class="exercise-stats-row">
+                <span class="exercise-stats-label">Дата последней тренировки:</span>
+                <span class="exercise-stats-val highlight">${summary.lastDate}</span>
+              </div>
+              <div class="exercise-stats-row">
+                <span class="exercise-stats-label">Максимальный вес:</span>
+                <span class="exercise-stats-val">${summary.maxWeightKg} кг</span>
+              </div>
+              <div class="exercise-stats-row">
+                <span class="exercise-stats-label">Количество подходов:</span>
+                <span class="exercise-stats-val">${summary.setsCount} (всего ${summary.totalReps} повт.)</span>
+              </div>
+            </div>
+
+            <div style="font-size: 11px; font-weight: 800; color: var(--text-secondary); margin: 12px 0 6px 0; letter-spacing: 0.5px;">
+              ДЕТАЛИЗАЦИЯ ПОДХОДОВ:
+            </div>
+            <div class="exercise-stats-sets-list" style="max-height: 200px; overflow-y: auto;">
+              ${setsListHtml || '<div style="font-size: 12px; color: var(--text-muted);">Нет подходов</div>'}
+            </div>
+          `;
+        }
+      } catch (err) {
+        if (historyBody) {
+          historyBody.innerHTML = `<div style="text-align:center;padding:20px;color:var(--accent-rose);font-size:13px;">Ошибка загрузки статистики</div>`;
+        }
+      }
+    };
+
+    const btnCloseHistory = document.getElementById('btn-close-exercise-history');
+    const btnDismissHistory = document.getElementById('btn-dismiss-exercise-history');
+    [btnCloseHistory, btnDismissHistory].forEach(btn => {
+      if (btn) {
+        btn.onclick = () => {
+          if (dialogHistory) {
+            if (typeof dialogHistory.close === 'function') dialogHistory.close();
+            else dialogHistory.style.display = 'none';
+          }
+        };
+      }
+    });
 
     // Trainer Profile Photo Selection
     if (el.trainerAvatarInput) {
@@ -2414,6 +3508,69 @@
       };
     }
 
+    // --- Trainer Exercises Catalog Events (Mobile Parity CRUD) ---
+    if (el.btnOpenAddExercise) {
+      el.btnOpenAddExercise.onclick = () => openEditExerciseModal(null);
+    }
+
+    if (el.btnCloseExerciseDialog) {
+      el.btnCloseExerciseDialog.onclick = () => el.dialogEditExercise?.close();
+    }
+
+    if (el.btnCancelEditExercise) {
+      el.btnCancelEditExercise.onclick = () => el.dialogEditExercise?.close();
+    }
+
+    if (el.trainerCatalogSearch) {
+      el.trainerCatalogSearch.oninput = (e) => {
+        state.catalogSearchQuery = e.target.value;
+        renderTrainerExercisesCatalog();
+      };
+    }
+
+    if (el.trainerCatalogGroupChips) {
+      el.trainerCatalogGroupChips.querySelectorAll('.chip-pill').forEach(chip => {
+        chip.onclick = () => {
+          el.trainerCatalogGroupChips.querySelectorAll('.chip-pill').forEach(c => c.classList.remove('active'));
+          chip.classList.add('active');
+          state.catalogSelectedGroup = chip.dataset.group;
+          renderTrainerExercisesCatalog();
+        };
+      });
+    }
+
+    if (el.formEditExercise) {
+      el.formEditExercise.onsubmit = async (e) => {
+        e.preventDefault();
+        const id = el.editExerciseId.value ? Number(el.editExerciseId.value) : null;
+        const name = el.editExerciseName.value.trim();
+        const muscleGroup = el.editExerciseGroup.value;
+        const defaultRestSeconds = parseInt(el.editExerciseRest.value, 10) || 90;
+
+        if (!name) return;
+
+        try {
+          if (id) {
+            await api(`/api/exercises/${id}`, {
+              method: 'PUT',
+              body: JSON.stringify({ name, muscleGroup, defaultRestSeconds })
+            });
+            showToast(`Упражнение «${name}» обновлено`, 'success');
+          } else {
+            await api('/api/exercises', {
+              method: 'POST',
+              body: JSON.stringify({ name, muscleGroup, defaultRestSeconds })
+            });
+            showToast(`Упражнение «${name}» добавлено в каталог`, 'success');
+          }
+          el.dialogEditExercise?.close();
+          loadTrainerExercisesCatalog();
+        } catch (err) {
+          showToast(err.message || 'Ошибка сохранения упражнения', 'error');
+        }
+      };
+    }
+
     // Regenerate PIN button
     el.btnRegeneratePin.onclick = async () => {
       try {
@@ -2441,17 +3598,146 @@
       }
     };
 
-    // Unpair Coach button
-    el.btnUnpairCoach.onclick = async () => {
-      try {
-        await api('/api/athlete/unpair', { method: 'POST' });
-        state.pairedCoach = null;
-        state.user.coach_name = '';
-        state.user.coach_phone = '';
-        renderAthleteProfile();
-        showToast('Вы успешно отвязались от тренера', 'info');
-      } catch {}
-    };
+    // Unpair Coach button with Telegram OTP confirmation
+    if (el.btnUnpairCoach) {
+      el.btnUnpairCoach.onclick = async () => {
+        const hasTg = Boolean(state.user.telegram_id || state.user.telegram_username);
+        if (!hasTg) {
+          // If Telegram not linked, confirm directly
+          if (!confirm('Вы уверены, что хотите отвязаться от текущего тренера?')) return;
+          try {
+            await api('/api/athlete/unpair', { method: 'POST', body: JSON.stringify({}) });
+            state.pairedCoach = null;
+            state.user.coach_name = '';
+            state.user.coach_phone = '';
+            renderAthleteProfile();
+            showToast('Вы успешно отвязались от тренера', 'info');
+          } catch (err) {
+            showToast(err.message || 'Ошибка отвязки', 'error');
+          }
+          return;
+        }
+
+        // Telegram linked: request OTP and show confirmation modal
+        try {
+          showToast('Запрашиваем проверочный код в Telegram...', 'info');
+          const res = await api('/api/athlete/unpair/request-otp', { method: 'POST' });
+          showToast(res.message || 'Код отправлен в Telegram бот', 'success');
+
+          if (el.dialogUnpairTitle) el.dialogUnpairTitle.textContent = 'ОТВЯЗКА ОТ ТРЕНЕРА';
+          if (el.dialogUnpairDesc) {
+            el.dialogUnpairDesc.textContent = 'Для безопасности разрыв связи с тренером требует подтверждения. Мы отправили 6-значный код в ваш привязанный Telegram бот.';
+          }
+          state.pendingUnpairAthleteId = null;
+          state.pendingUnpairAthleteName = null;
+
+          if (el.unpairInputCode) el.unpairInputCode.value = '';
+          if (el.dialogUnpairConfirm) {
+            if (typeof el.dialogUnpairConfirm.showModal === 'function') {
+              try { el.dialogUnpairConfirm.showModal(); } catch (_) { el.dialogUnpairConfirm.setAttribute('open', ''); }
+            } else {
+              el.dialogUnpairConfirm.setAttribute('open', '');
+            }
+          }
+          if (el.unpairInputCode) setTimeout(() => el.unpairInputCode.focus(), 50);
+
+          // 5-minute countdown timer
+          let remaining = 300;
+          if (state.unpairTimerInterval) clearInterval(state.unpairTimerInterval);
+          const updateUnpairTimer = () => {
+            const m = Math.floor(remaining / 60);
+            const s = remaining % 60;
+            const mm = String(m).padStart(2, '0');
+            const ss = String(s).padStart(2, '0');
+            if (el.unpairTgTimerDisplay) el.unpairTgTimerDisplay.textContent = `⏱ Действует: ${mm}:${ss}`;
+            if (remaining <= 0) {
+              clearInterval(state.unpairTimerInterval);
+              el.dialogUnpairConfirm?.close();
+              showToast('Время действия кода истекло. Запросите заново.', 'error');
+            }
+            remaining--;
+          };
+          updateUnpairTimer();
+          state.unpairTimerInterval = setInterval(updateUnpairTimer, 1000);
+        } catch (err) {
+          showToast(err.message || 'Ошибка запроса кода в Telegram', 'error');
+        }
+      };
+    }
+
+    if (el.btnCloseUnpairDialog) {
+      el.btnCloseUnpairDialog.onclick = () => {
+        if (state.unpairTimerInterval) clearInterval(state.unpairTimerInterval);
+        el.dialogUnpairConfirm?.close();
+      };
+    }
+
+    if (el.btnCancelUnpairDialog) {
+      el.btnCancelUnpairDialog.onclick = () => {
+        if (state.unpairTimerInterval) clearInterval(state.unpairTimerInterval);
+        el.dialogUnpairConfirm?.close();
+      };
+    }
+
+    if (el.formUnpairConfirm) {
+      el.formUnpairConfirm.onsubmit = async (e) => {
+        e.preventDefault();
+        const code = (el.unpairInputCode?.value || '').trim();
+        if (!code) return;
+
+        // Case 1: Trainer unpairing a client
+        if (state.user?.role === 'trainer' && state.pendingUnpairAthleteId) {
+          const id = state.pendingUnpairAthleteId;
+          const name = state.pendingUnpairAthleteName || 'подопечного';
+          try {
+            const res = await api('/api/trainer/unpair', {
+              method: 'POST',
+              body: JSON.stringify({ athleteId: id, code })
+            });
+            if (state.unpairTimerInterval) clearInterval(state.unpairTimerInterval);
+            el.dialogUnpairConfirm?.close();
+
+            state.clients = state.clients.filter(c => c.id !== id);
+            if (state.activeClientId === id) {
+              state.activeClientId = null;
+              if (el.trainerActiveClientName) el.trainerActiveClientName.textContent = 'Нет подопечных';
+              if (el.trainerActiveClientAvatar) el.trainerActiveClientAvatar.innerHTML = '';
+              const cardRestrictions = document.getElementById('card-trainer-restrictions');
+              const workoutBanner = document.getElementById('trainer-workout-restrictions-banner');
+              if (cardRestrictions) cardRestrictions.style.display = 'none';
+              if (workoutBanner) workoutBanner.style.display = 'none';
+            }
+
+            state.pendingUnpairAthleteId = null;
+            state.pendingUnpairAthleteName = null;
+            renderTrainerClientsList();
+            populateTrainerClientDropdown();
+            showToast(res.message || `✅ Подопечный «${name}» успешно отвязан!`, 'success');
+            loadTrainerClients();
+          } catch (err) {
+            showToast(err.message || 'Неверный код подтверждения', 'error');
+          }
+          return;
+        }
+
+        // Case 2: Athlete unpairing from coach
+        try {
+          await api('/api/athlete/unpair', {
+            method: 'POST',
+            body: JSON.stringify({ code })
+          });
+          if (state.unpairTimerInterval) clearInterval(state.unpairTimerInterval);
+          el.dialogUnpairConfirm?.close();
+          state.pairedCoach = null;
+          state.user.coach_name = '';
+          state.user.coach_phone = '';
+          renderAthleteProfile();
+          showToast('✅ Вы успешно отвязались от тренера!', 'success');
+        } catch (err) {
+          showToast(err.message || 'Неверный код подтверждения', 'error');
+        }
+      };
+    }
 
     // Trainer Select Client dropdown
     el.trainerClientSelect.onchange = (e) => {
@@ -2459,6 +3745,14 @@
         selectTrainerClient(e.target.value);
       }
     };
+
+    // Trainer Clients Search input
+    if (el.trainerClientsSearch) {
+      el.trainerClientsSearch.oninput = (e) => {
+        state.clientsSearchQuery = e.target.value || '';
+        renderTrainerClientsList();
+      };
+    }
 
     // Trainer Pair Code input auto-filter
     el.inputPairCode.oninput = (e) => {
@@ -2520,6 +3814,39 @@
         loadTrainerExerciseTimeline(state.trainerSelectedExercise);
       };
     }
+
+    // --- Interactive Metric Toggle Handlers (Weight, Sets, Reps) ---
+    function setupMetricToggle(btn, metricKey, isTrainer = false) {
+      if (!btn) return;
+      btn.onclick = () => {
+        state.chartMetrics[metricKey] = !state.chartMetrics[metricKey];
+        btn.classList.toggle('active', state.chartMetrics[metricKey]);
+        btn.classList.toggle('inactive', !state.chartMetrics[metricKey]);
+
+        // Sync corresponding button in other view
+        const partnerBtn = isTrainer 
+          ? document.getElementById(`btn-toggle-metric-${metricKey}`)
+          : document.getElementById(`btn-trainer-toggle-metric-${metricKey}`);
+        if (partnerBtn) {
+          partnerBtn.classList.toggle('active', state.chartMetrics[metricKey]);
+          partnerBtn.classList.toggle('inactive', !state.chartMetrics[metricKey]);
+        }
+
+        // Re-render current active chart
+        if (state.user?.role === 'trainer' && state.trainerSelectedExercise) {
+          loadTrainerExerciseTimeline(state.trainerSelectedExercise);
+        } else if (state.athleteSelectedExercise) {
+          loadAthleteExerciseTimeline(state.athleteSelectedExercise);
+        }
+      };
+    }
+
+    setupMetricToggle(el.btnToggleMetricWeight, 'weight', false);
+    setupMetricToggle(el.btnToggleMetricSets, 'sets', false);
+    setupMetricToggle(el.btnToggleMetricReps, 'reps', false);
+    setupMetricToggle(el.btnTrainerToggleMetricWeight, 'weight', true);
+    setupMetricToggle(el.btnTrainerToggleMetricSets, 'sets', true);
+    setupMetricToggle(el.btnTrainerToggleMetricReps, 'reps', true);
 
     // --- Body Weight Dialog (Athlete & Trainer) ---
     function openWeightDialog() {
@@ -2694,6 +4021,98 @@
     if (el.btnSyncHeader) el.btnSyncHeader.onclick = triggerCloudSync;
     if (el.btnSyncAthlete) el.btnSyncAthlete.onclick = triggerCloudSync;
     if (el.btnSyncTrainer) el.btnSyncTrainer.onclick = triggerCloudSync;
+
+    // --- Pull-To-Refresh Swipe Gesture Engine (Mobile & Telegram WebApp) ---
+    const ptrIndicator = document.getElementById('ptr-indicator');
+    const mainViewport = document.getElementById('app-main-viewport') || document.querySelector('.app-main-viewport');
+    let touchStartY = 0;
+    let touchMoveY = 0;
+    let isPulling = false;
+
+    if (mainViewport && ptrIndicator) {
+      mainViewport.addEventListener('touchstart', (e) => {
+        // Only trigger pull-to-refresh if scrolled at the very top
+        if (mainViewport.scrollTop <= 2 && e.touches.length === 1) {
+          touchStartY = e.touches[0].clientY;
+          isPulling = true;
+        } else {
+          isPulling = false;
+        }
+      }, { passive: true });
+
+      mainViewport.addEventListener('touchmove', (e) => {
+        if (!isPulling || isSyncing || mainViewport.scrollTop > 2) return;
+        touchMoveY = e.touches[0].clientY;
+        const pullDistance = touchMoveY - touchStartY;
+
+        if (pullDistance > 15) {
+          ptrIndicator.classList.add('active');
+          const progress = Math.min(pullDistance / 80, 1);
+          const icon = ptrIndicator.querySelector('.ptr-icon');
+          if (icon) icon.style.transform = `rotate(${progress * 360}deg)`;
+          const label = ptrIndicator.querySelector('.ptr-label');
+          if (label) {
+            label.textContent = pullDistance > 70 ? 'Отпустите для синхронизации' : 'Потяните вниз...';
+          }
+        } else {
+          ptrIndicator.classList.remove('active');
+        }
+      }, { passive: true });
+
+      const finishPull = async (e) => {
+        if (!isPulling) return;
+        const pullDistance = touchMoveY - touchStartY;
+        isPulling = false;
+        touchStartY = 0;
+        touchMoveY = 0;
+
+        if (pullDistance > 70 && !isSyncing) {
+          ptrIndicator.classList.add('active', 'refreshing');
+          const label = ptrIndicator.querySelector('.ptr-label');
+          if (label) label.textContent = 'Синхронизация с облаком...';
+
+          // Trigger Telegram Haptic Feedback if running inside Telegram WebApp
+          try {
+            if (window.Telegram?.WebApp?.HapticFeedback) {
+              window.Telegram.WebApp.HapticFeedback.impactOccurred('medium');
+            }
+          } catch (_) {}
+
+          try {
+            await triggerCloudSync();
+            try {
+              if (window.Telegram?.WebApp?.HapticFeedback) {
+                window.Telegram.WebApp.HapticFeedback.notificationOccurred('success');
+              }
+            } catch (_) {}
+          } finally {
+            ptrIndicator.classList.remove('refreshing');
+            setTimeout(() => {
+              ptrIndicator.classList.remove('active');
+              if (label) label.textContent = 'Потяните для синхронизации';
+            }, 300);
+          }
+        } else {
+          ptrIndicator.classList.remove('active');
+        }
+      };
+
+      mainViewport.addEventListener('touchend', finishPull);
+      mainViewport.addEventListener('touchcancel', finishPull);
+    }
+
+    // Rest Timer Action Buttons
+    if (el.btnTimerAdd30) el.btnTimerAdd30.onclick = () => addRestTimerSeconds(30);
+    if (el.btnTimerCancel) el.btnTimerCancel.onclick = () => stopRestTimer();
+
+    // Auto-sync on tab switch
+    document.querySelectorAll('.nav-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        if (state.token) {
+          triggerCloudSync().catch(() => {});
+        }
+      });
+    });
 
     // Logout Action Handlers
     if (el.btnLogoutHeader) el.btnLogoutHeader.onclick = () => logout(true);

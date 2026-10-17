@@ -147,6 +147,77 @@ function parseJsonBody(req) {
   });
 }
 
+function isTrainerApprovalRequired() {
+  if (process.env.REQUIRE_TRAINER_APPROVAL === 'true') return true;
+  if (process.env.REQUIRE_TRAINER_APPROVAL === 'false') return false;
+  return process.env.NODE_ENV !== 'test';
+}
+
+function parseClientDeviceInfo(userAgent) {
+  const ua = String(userAgent || '');
+  let browser = 'Unknown Browser';
+  let os = 'Unknown OS';
+
+  // OS Detection
+  if (/windows phone/i.test(ua)) os = 'Windows Phone';
+  else if (/win(dows|98|nt|2000|xp|vista|7|8|10|11)/i.test(ua)) os = 'Windows';
+  else if (/android/i.test(ua)) os = 'Android';
+  else if (/iphone|ipad|ipod/i.test(ua)) os = 'iOS';
+  else if (/macintosh|mac os x/i.test(ua)) os = 'macOS';
+  else if (/linux/i.test(ua)) os = 'Linux';
+
+  // Browser Detection
+  if (/edg\//i.test(ua)) {
+    const m = ua.match(/edg\/([\d.]+)/i);
+    browser = `Edge ${m ? m[1].split('.')[0] : ''}`.trim();
+  } else if (/chrome|crios/i.test(ua) && !/opr|opera/i.test(ua)) {
+    const m = ua.match(/(?:chrome|crios)\/([\d.]+)/i);
+    browser = `Chrome ${m ? m[1].split('.')[0] : ''}`.trim();
+  } else if (/firefox|fxios/i.test(ua)) {
+    const m = ua.match(/(?:firefox|fxios)\/([\d.]+)/i);
+    browser = `Firefox ${m ? m[1].split('.')[0] : ''}`.trim();
+  } else if (/safari/i.test(ua) && !/chrome|crios/i.test(ua)) {
+    const m = ua.match(/version\/([\d.]+)/i);
+    browser = `Safari ${m ? m[1].split('.')[0] : ''}`.trim();
+  } else if (/telegram/i.test(ua)) {
+    browser = 'Telegram WebApp';
+  }
+
+  return `${browser} on ${os}`;
+}
+
+async function sendLoginSecurityAlert(bot, telegramId, { siteName, botUsername, clientIp, userAgent, token }) {
+  if (!bot || !bot.api || !telegramId) return;
+  const device = parseClientDeviceInfo(userAgent);
+  const now = new Date();
+  const dateStr = now.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric' });
+  const timeStr = now.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+  const targetBot = botUsername ? `@${botUsername}` : '@fitnessecosystemBOT';
+  const siteDomain = siteName || 'fitness-ecosystem-pro.onrender.com';
+
+  const alertMessage = 
+    `🔔 <b>[${dateStr} ${timeStr}] Telegram Security Alert</b>\n\n` +
+    `You have successfully logged in on <b>${siteDomain}</b> via <b>${targetBot}</b>. The website received your name, username and profile photo.\n\n` +
+    `💻 <b>Browser:</b> ${escapeHtml(device)}\n` +
+    `🌐 <b>IP:</b> <code>${escapeHtml(clientIp || '127.0.0.1')}</code>\n\n` +
+    `<i>If you did not initiate this login, tap the button below to immediately terminate the session.</i>`;
+
+  const inlineKeyboard = {
+    inline_keyboard: [
+      token ? [{ text: '⛔ Terminate session (Завершить сессию)', callback_data: `terminate_${token.slice(0, 16)}` }] : []
+    ].filter(r => r.length > 0)
+  };
+
+  try {
+    await bot.api.sendMessage(telegramId, alertMessage, {
+      parse_mode: 'HTML',
+      reply_markup: inlineKeyboard
+    });
+  } catch (err) {
+    console.warn('[Security Alert] Failed to send login notification to Telegram:', err.message);
+  }
+}
+
 function getAuthUser(req) {
   let token = null;
   const authHeader = req.headers['authorization'];
@@ -157,7 +228,14 @@ function getAuthUser(req) {
     if (match) token = match[1];
   }
   if (!token) return null;
-  return db.getUserByToken(token);
+  const user = db.getUserByToken(token);
+  if (!user) return null;
+  const isOwnerOrAdmin = ['santila213', 'spirit5449', 'kotpers67', 'kotpers76'].includes((user.username || '').toLowerCase()) ||
+    ['santila213', 'spirit5449', 'kotpers67', 'kotpers76'].includes((user.telegram_username || '').replace(/^@/, '').toLowerCase());
+  if (user.role === 'trainer' && user.is_approved === 0 && !isOwnerOrAdmin && isTrainerApprovalRequired()) {
+    return null;
+  }
+  return user;
 }
 
 const server = http.createServer(async (req, res) => {
@@ -185,6 +263,15 @@ const server = http.createServer(async (req, res) => {
         if (authLimiter.isRateLimited(clientIp)) {
           return sendError(res, 429, 'Слишком много попыток. Попробуйте через минуту.');
         }
+      }
+
+      // HEALTH CHECK & SELF-PING KEEPALIVE
+      if ((pathname === '/api/health' || pathname === '/api/ping') && req.method === 'GET') {
+        return sendJson(res, 200, {
+          status: 'ok',
+          uptime: process.uptime(),
+          timestamp: new Date().toISOString()
+        });
       }
 
       // REGISTER
@@ -228,7 +315,7 @@ const server = http.createServer(async (req, res) => {
             if (role === 'trainer') {
               db.approveTrainer(existing.id);
             }
-            const token = generateToken();
+            const token = generateToken(existing.id, existing.role);
             db.createAuthToken(token, existing.id);
             const updated = db.findUserById(existing.id);
             return sendJson(res, 200, {
@@ -266,8 +353,8 @@ const server = http.createServer(async (req, res) => {
 
         const isOwnerOrAdmin = ['santila213', 'spirit5449', 'kotpers67', 'kotpers76'].includes(cleanUsername.toLowerCase()) ||
           ['santila213', 'spirit5449', 'kotpers67', 'kotpers76'].includes((cleanTelegram || '').replace(/^@/, '').toLowerCase());
-        const requireTrainerApproval = (process.env.REQUIRE_TRAINER_APPROVAL === 'true');
-        const isApproved = (role === 'trainer' && requireTrainerApproval) ? 0 : 1;
+        const requireTrainerApproval = isTrainerApprovalRequired();
+        const isApproved = (role === 'trainer' && requireTrainerApproval && !isOwnerOrAdmin) ? 0 : 1;
         const userId = db.createUser(cleanUsername, passwordHash, role, escapedFullName, escapedPhone, pairingCode, clientUuid, avatarBase64 || '', isApproved);
 
         if (role === 'trainer') {
@@ -280,7 +367,7 @@ const server = http.createServer(async (req, res) => {
           const internalUsername = createdUser ? createdUser.username : cleanUsername;
 
           // Send notification only to configured admin/owners (no broadcast leak)
-          if (tgBotInstance) {
+          if (tgBotInstance && isApproved === 0) {
             const adminChatIds = new Set();
             if (process.env.ADMIN_CHAT_ID) {
               adminChatIds.add(String(process.env.ADMIN_CHAT_ID).trim());
@@ -320,16 +407,17 @@ const server = http.createServer(async (req, res) => {
             }
           }
 
-          if (requireTrainerApproval) {
+          if (isApproved === 0) {
             return sendJson(res, 201, {
               success: true,
               pendingApproval: true,
+              username: internalUsername,
               message: '⏳ ЗАЯВКА НА РАССМОТРЕНИИ\nВаша заявка на создание аккаунта тренера принята!\n\nВ течение 72 часов ваша заявка будет обработана, мы свяжемся если будет необходима дополнительная информация.'
             });
           }
         }
 
-        const token = generateToken();
+        const token = generateToken(userId, role);
         db.createAuthToken(token, userId);
 
         // Sync athlete pairing code to Google Drive cloud
@@ -409,7 +497,7 @@ const server = http.createServer(async (req, res) => {
             const isOwnerOrAdmin = ['santila213', 'spirit5449', 'kotpers67', 'kotpers76'].includes(user.username.toLowerCase()) ||
               ['santila213', 'spirit5449', 'kotpers67', 'kotpers76'].includes((user.telegram_username || '').replace(/^@/, '').toLowerCase());
             if (requestedRole === 'trainer') {
-              if (isOwnerOrAdmin || process.env.REQUIRE_TRAINER_APPROVAL !== 'true') {
+              if (isOwnerOrAdmin || !isTrainerApprovalRequired()) {
                 db.approveTrainer(user.id);
                 user.is_approved = 1;
               } else {
@@ -422,7 +510,7 @@ const server = http.createServer(async (req, res) => {
         if (user && user.role === 'trainer' && user.is_approved === 0) {
           const isOwnerOrAdmin = ['santila213', 'spirit5449', 'kotpers67', 'kotpers76'].includes(user.username.toLowerCase()) ||
             ['santila213', 'spirit5449', 'kotpers67', 'kotpers76'].includes((user.telegram_username || '').replace(/^@/, '').toLowerCase());
-          if (isOwnerOrAdmin || process.env.REQUIRE_TRAINER_APPROVAL !== 'true') {
+          if (isOwnerOrAdmin || !isTrainerApprovalRequired()) {
             db.approveTrainer(user.id);
             user.is_approved = 1;
           } else {
@@ -460,7 +548,33 @@ const server = http.createServer(async (req, res) => {
           });
         }
 
-        const token = generateToken();
+        if (user.role === 'athlete' && cloudSyncService) {
+          try {
+            await cloudSyncService.syncAthleteFromCloud(user, db);
+            const refetched = db.findUserById(user.id);
+            if (refetched) {
+              user.full_name = refetched.full_name;
+              user.phone = refetched.phone;
+              user.avatar_base64 = refetched.avatar_base64;
+              user.client_uuid = refetched.client_uuid;
+              user.pairing_code = refetched.pairing_code;
+              user.pairing_code_created_at = refetched.pairing_code_created_at;
+              user.restrictions = refetched.restrictions;
+            }
+          } catch (_) {}
+        } else if (user.role === 'trainer' && cloudSyncService) {
+          try {
+            await cloudSyncService.syncTrainerFromCloud(user, db);
+            const refetched = db.findUserById(user.id);
+            if (refetched) {
+              user.full_name = refetched.full_name;
+              user.phone = refetched.phone;
+              user.avatar_base64 = refetched.avatar_base64;
+            }
+          } catch (_) {}
+        }
+
+        const token = generateToken(user.id, user.role);
         db.createAuthToken(token, user.id);
 
         return sendJson(res, 200, {
@@ -476,6 +590,7 @@ const server = http.createServer(async (req, res) => {
             pairingCode: user.pairing_code,
             pairingCodeCreatedAt: user.pairing_code_created_at || 0,
             clientUuid: user.client_uuid || '',
+            restrictions: user.restrictions || '',
             coachName: user.coach_name || '',
             coachPhone: user.coach_phone || '',
             isPrivate: Boolean(user.is_private),
@@ -521,12 +636,28 @@ const server = http.createServer(async (req, res) => {
         }
 
         telegramOtpStore.delete(`2fa_${uid}`);
-        const user = db.findUserById(uid);
+        let user = db.findUserById(uid);
         if (!user) {
           return sendError(res, 404, 'Пользователь не найден');
         }
 
-        const token = generateToken();
+        if (user.role === 'athlete' && cloudSyncService) {
+          try {
+            await cloudSyncService.syncAthleteFromCloud(user, db);
+            const refetched = db.findUserById(user.id);
+            if (refetched) {
+              user.full_name = refetched.full_name;
+              user.phone = refetched.phone;
+              user.avatar_base64 = refetched.avatar_base64;
+              user.client_uuid = refetched.client_uuid;
+              user.pairing_code = refetched.pairing_code;
+              user.pairing_code_created_at = refetched.pairing_code_created_at;
+              user.restrictions = refetched.restrictions;
+            }
+          } catch (_) {}
+        }
+
+        const token = generateToken(user.id, user.role);
         db.createAuthToken(token, user.id);
 
         return sendJson(res, 200, {
@@ -542,6 +673,7 @@ const server = http.createServer(async (req, res) => {
             pairingCode: user.pairing_code,
             pairingCodeCreatedAt: user.pairing_code_created_at || 0,
             clientUuid: user.client_uuid || '',
+            restrictions: user.restrictions || '',
             coachName: user.coach_name || '',
             coachPhone: user.coach_phone || '',
             isPrivate: Boolean(user.is_private),
@@ -621,8 +753,12 @@ const server = http.createServer(async (req, res) => {
         }
 
         const usernameKey = tgUsername ? `tg_${tgUsername.toLowerCase()}` : `tg_${tgId}`;
-        let user = db.findUserByUsername(usernameKey);
+        let user = db.findUserByUsername(usernameKey) || (tgUsername ? db.findUserByTelegramUsername(tgUsername) : null);
         const role = requestedRole === 'trainer' ? 'trainer' : 'athlete';
+        const isOwnerOrAdmin = ['santila213', 'spirit5449', 'kotpers67', 'kotpers76'].includes((tgUsername || '').toLowerCase()) ||
+          ['santila213', 'spirit5449', 'kotpers67', 'kotpers76'].includes((user?.username || '').toLowerCase());
+        const requireTrainerApproval = isTrainerApprovalRequired();
+        const isApproved = (role === 'trainer' && requireTrainerApproval && !isOwnerOrAdmin) ? 0 : 1;
 
         if (!user) {
           const passwordHash = hashPassword(crypto.randomBytes(24).toString('hex'));
@@ -638,17 +774,63 @@ const server = http.createServer(async (req, res) => {
             '', // phone
             pairingCode,
             clientUuid,
-            tgPhotoUrl
+            tgPhotoUrl,
+            isApproved
           );
 
           if (role === 'athlete') {
             cloudSyncService.registerAthletePairing(pairingCode, clientUuid, escapeHtml(fullName), '', '', tgPhotoUrl || '').catch(() => {});
           }
 
+          if (tgUsername) {
+            db.linkTelegram(userId, tgId || '', tgUsername);
+          }
+
           user = db.findUserById(userId);
+
+          if (role === 'trainer' && isApproved === 0) {
+            if (tgBotInstance) {
+              const adminChatIds = new Set();
+              if (process.env.ADMIN_CHAT_ID) adminChatIds.add(String(process.env.ADMIN_CHAT_ID).trim());
+              ['santila213', 'spirit5449'].forEach(adminHandle => {
+                const cId = userTgChatMap.get(adminHandle) || userTgChatMap.get(adminHandle.toLowerCase());
+                if (cId) adminChatIds.add(String(cId));
+              });
+
+              for (const adminChatId of adminChatIds) {
+                try {
+                  await tgBotInstance.api.sendMessage(
+                    adminChatId,
+                    `🔔 <b>НОВАЯ ЗАЯВКА НА АККАУНТ ТРЕНЕРА ЧЕРЕЗ TELEGRAM!</b>\n\n` +
+                    `👤 <b>Имя:</b> ${escapeHtml(fullName)}\n` +
+                    `🏷 <b>Логин:</b> ${user.username}\n` +
+                    `✈ <b>Telegram:</b> @${tgUsername || tgId}\n\n` +
+                    `Нажмите кнопку ниже или отправьте:\n<code>/approve_${userId}</code>`,
+                    {
+                      parse_mode: 'HTML',
+                      reply_markup: {
+                        inline_keyboard: [
+                          [{ text: `✅ Одобрить тренера #${userId}`, callback_data: `approve_${userId}` }]
+                        ]
+                      }
+                    }
+                  );
+                } catch (_) {}
+              }
+            }
+          }
         }
 
-        const token = generateToken();
+        if (user.role === 'trainer' && user.is_approved === 0 && !isOwnerOrAdmin) {
+          return sendJson(res, 201, {
+            success: true,
+            pendingApproval: true,
+            username: user.username,
+            message: '⏳ ЗАЯВКА НА РАССМОТРЕНИИ\nВаша заявка на создание аккаунта тренера принята!\n\nВ течение 72 часов ваша заявка будет обработана, мы свяжемся если будет необходима дополнительная информация.'
+          });
+        }
+
+        const token = generateToken(user.id, user.role);
         db.createAuthToken(token, user.id);
 
         return sendJson(res, 200, {
@@ -769,6 +951,16 @@ const server = http.createServer(async (req, res) => {
           });
         }
 
+        if (session.status === 'PENDING_APPROVAL') {
+          const username = session.username;
+          telegramSessionStore.delete(sessionId);
+          return sendJson(res, 200, {
+            status: 'PENDING_APPROVAL',
+            username,
+            message: '⏳ ЗАЯВКА НА РАССМОТРЕНИИ\nВаша заявка на создание аккаунта тренера принята!\n\nВ течение 72 часов ваша заявка будет обработана, мы свяжемся если будет необходима дополнительная информация.'
+          });
+        }
+
         return sendJson(res, 200, {
           status: 'PENDING',
           message: 'Ожидание подтверждения в Telegram...'
@@ -870,79 +1062,177 @@ const server = http.createServer(async (req, res) => {
         const body = await parseJsonBody(req);
         const { username, code } = body;
         const cleanUsername = String(username || '').replace(/^@/, '').trim().toLowerCase();
-        const cleanCode = String(code || '').trim();
+        const cleanCode = String(code || '').replace(/\D/g, '').trim();
 
-        if (!cleanUsername || !cleanCode) {
-          return sendError(res, 400, 'Введите имя пользователя и 6-значный код');
+        if (!cleanCode || cleanCode.length !== 6) {
+          return sendError(res, 400, 'Введите корректный 6-значный код');
         }
 
-        const record = telegramOtpStore.get(cleanUsername);
-        if (!record) {
-          return sendError(res, 400, 'Код не запрашивался или срок действия (5 минут) истек');
-        }
+        const now = Date.now();
+        let matchedOtpRecord = null;
+        let matchedOtpKey = null;
 
-        if (Date.now() > record.expiresAt) {
-          telegramOtpStore.delete(cleanUsername);
-          return sendError(res, 400, 'Срок действия кода истек (5 минут). Запросите новый код.');
-        }
+        if (cleanUsername) {
+          const record = telegramOtpStore.get(cleanUsername) || telegramOtpStore.get(`id_${cleanUsername}`);
+          if (record) {
+            if (now > record.expiresAt) {
+              telegramOtpStore.delete(cleanUsername);
+              return sendError(res, 400, 'Срок действия кода истек (5 минут). Запросите новый код.');
+            }
 
-        if (record.attempts >= 5) {
-          telegramOtpStore.delete(cleanUsername);
-          return sendError(res, 429, 'Превышено количество попыток. Запросите код заново.');
-        }
+            if (record.attempts >= 5) {
+              telegramOtpStore.delete(cleanUsername);
+              return sendError(res, 429, 'Превышено количество попыток. Запросите код заново.');
+            }
 
-        if (record.code !== cleanCode) {
-          record.attempts++;
-          return sendError(res, 400, 'Неверный код из Telegram');
-        }
+            if (record.code !== cleanCode) {
+              record.attempts = (record.attempts || 0) + 1;
+              if (record.attempts >= 5) {
+                telegramOtpStore.delete(cleanUsername);
+                return sendError(res, 429, 'Превышено количество попыток. Запросите код заново.');
+              }
+              return sendError(res, 400, 'Неверный код из Telegram');
+            }
 
-        // Code is verified and consumed (single-use guaranteed)
-        telegramOtpStore.delete(cleanUsername);
-
-        let user = db.findUserByUsername(cleanUsername);
-        if (!user) user = db.findUserByUsername(`tg_${cleanUsername}`);
-        if (!user) user = db.findUserByTelegramUsername(cleanUsername);
-        if (!user && cleanUsername.replace(/\D/g, '').length >= 7) {
-          user = db.findUserByPhone(cleanUsername.replace(/\D/g, ''));
-        }
-
-        if (user) {
-          if (!user.telegram_username && cleanUsername) {
-            db.linkTelegram(user.id, user.telegram_id || '', cleanUsername);
-            user.telegram_username = cleanUsername;
+            matchedOtpRecord = record;
+            matchedOtpKey = cleanUsername;
           }
-          const token = generateToken();
-          db.createAuthToken(token, user.id);
+        }
+
+        if (!matchedOtpRecord) {
+          // If username not provided or not matched in direct store entry:
+          // Search unexpired entries in telegramOtpStore
+          for (const [key, entry] of telegramOtpStore.entries()) {
+            if (entry && entry.code === cleanCode && entry.expiresAt > now) {
+              if (entry.attempts >= 5) continue;
+              matchedOtpRecord = entry;
+              matchedOtpKey = key;
+              break;
+            }
+          }
+        }
+
+        let user = null;
+
+        if (matchedOtpRecord) {
+          if (matchedOtpKey) telegramOtpStore.delete(matchedOtpKey);
+          if (cleanUsername) telegramOtpStore.delete(cleanUsername);
+          if (matchedOtpRecord.username) telegramOtpStore.delete(matchedOtpRecord.username);
+          if (matchedOtpRecord.tgId) telegramOtpStore.delete(`id_${matchedOtpRecord.tgId}`);
+
+          if (matchedOtpRecord.userId) {
+            user = db.findUserById(matchedOtpRecord.userId);
+          }
+          if (!user && matchedOtpRecord.tgId) {
+            user = db.findUserByTelegramId(String(matchedOtpRecord.tgId));
+          }
+          if (!user && matchedOtpRecord.username) {
+            user = db.findUserByTelegramUsername(matchedOtpRecord.username) ||
+                   db.findUserByUsername(matchedOtpRecord.username) ||
+                   db.findUserByUsername(`tg_${matchedOtpRecord.username}`);
+          }
+          if (!user && cleanUsername) {
+            user = db.findUserByUsername(cleanUsername) ||
+                   db.findUserByUsername(`tg_${cleanUsername}`) ||
+                   db.findUserByTelegramUsername(cleanUsername);
+          }
+        }
+
+        // If not matched or no user resolved from OTP store, match against athlete pairing PIN in SQLite
+        if (!user) {
+          const PAIRING_TTL = 5 * 60 * 1000;
+          const candidate = db.findUserByPairingCode(cleanCode);
+          if (candidate && candidate.pairing_code_created_at && (now - candidate.pairing_code_created_at < PAIRING_TTL)) {
+            user = db.findUserById(candidate.id) || candidate;
+          }
+        }
+
+        // If OTP was valid but it belongs to a brand-new Telegram user without DB account yet
+        if (!user && matchedOtpRecord) {
           return sendJson(res, 200, {
             success: true,
-            isNewUser: false,
-            token,
-            user: {
-              id: user.id,
-              username: user.username,
-              role: user.role,
-              fullName: user.full_name,
-              phone: user.phone,
-              avatarBase64: user.avatar_base64 || '',
-              pairingCode: user.pairing_code,
-              clientUuid: user.client_uuid || '',
-              coachName: user.coach_name || '',
-              coachPhone: user.coach_phone || '',
-              isPrivate: Boolean(user.is_private),
-              telegram_id: String(user.telegram_id || ''),
-              telegramId: String(user.telegram_id || ''),
-              telegram_username: String(user.telegram_username || cleanUsername || ''),
-              telegramUsername: String(user.telegram_username || cleanUsername || ''),
-              two_factor_enabled: Number(user.two_factor_enabled) || 0,
-              twoFactorEnabled: Boolean(user.two_factor_enabled)
-            }
+            isNewUser: true,
+            telegramUsername: matchedOtpRecord.username || cleanUsername || ''
           });
         }
 
+        if (!user) {
+          return sendError(res, 400, 'Неверный или истекший 6-значный код');
+        }
+
+        if (!user.telegram_username && cleanUsername) {
+          db.linkTelegram(user.id, user.telegram_id || '', cleanUsername);
+          user.telegram_username = cleanUsername;
+        }
+
+        if (user.role === 'athlete' && cloudSyncService) {
+          try {
+            await cloudSyncService.syncAthleteFromCloud(user, db);
+            const refetched = db.findUserById(user.id);
+            if (refetched) {
+              user.full_name = refetched.full_name;
+              user.phone = refetched.phone;
+              user.avatar_base64 = refetched.avatar_base64;
+              user.client_uuid = refetched.client_uuid;
+              user.pairing_code = refetched.pairing_code;
+              user.pairing_code_created_at = refetched.pairing_code_created_at;
+              user.restrictions = refetched.restrictions;
+            }
+          } catch (_) {}
+        } else if (user.role === 'trainer' && cloudSyncService) {
+          try {
+            await cloudSyncService.syncTrainerFromCloud(user, db);
+            const refetched = db.findUserById(user.id);
+            if (refetched) {
+              user.full_name = refetched.full_name;
+              user.phone = refetched.phone;
+              user.avatar_base64 = refetched.avatar_base64;
+            }
+          } catch (_) {}
+        }
+
+        const isOwnerOrAdmin = ['santila213', 'spirit5449', 'kotpers67', 'kotpers76'].includes((user.username || '').toLowerCase()) ||
+          ['santila213', 'spirit5449', 'kotpers67', 'kotpers76'].includes((user.telegram_username || cleanUsername || '').toLowerCase());
+        if (user.role === 'trainer' && user.is_approved === 0 && !isOwnerOrAdmin) {
+          if (!isTrainerApprovalRequired()) {
+            db.approveTrainer(user.id);
+            user.is_approved = 1;
+          } else {
+            return sendJson(res, 403, {
+              success: false,
+              pendingApproval: true,
+              username: user.username,
+              error: '⏳ ЗАЯВКА НА РАССМОТРЕНИИ\nВаша заявка на создание аккаунта тренера принята!\n\nВ течение 72 часов ваша заявка будет обработана, мы свяжемся если будет необходима дополнительная информация.'
+            });
+          }
+        }
+
+        const token = generateToken(user.id, user.role);
+        db.createAuthToken(token, user.id);
         return sendJson(res, 200, {
           success: true,
-          isNewUser: true,
-          telegramUsername: cleanUsername
+          isNewUser: false,
+          token,
+          user: {
+            id: user.id,
+            username: user.username,
+            role: user.role,
+            fullName: user.full_name,
+            phone: user.phone,
+            avatarBase64: user.avatar_base64 || '',
+            pairingCode: user.pairing_code,
+            clientUuid: user.client_uuid || '',
+            restrictions: user.restrictions || '',
+            coachName: user.coach_name || '',
+            coachPhone: user.coach_phone || '',
+            isPrivate: Boolean(user.is_private),
+            telegram_id: String(user.telegram_id || ''),
+            telegramId: String(user.telegram_id || ''),
+            telegram_username: String(user.telegram_username || cleanUsername || ''),
+            telegramUsername: String(user.telegram_username || cleanUsername || ''),
+            two_factor_enabled: Number(user.two_factor_enabled) || 0,
+            twoFactorEnabled: Boolean(user.two_factor_enabled)
+          }
         });
       }
 
@@ -972,6 +1262,10 @@ const server = http.createServer(async (req, res) => {
         if (!user && cleanPhone) user = db.findUserByPhone(cleanPhone);
         if (!user) user = db.findUserByFullName(cleanFullName);
 
+        const isOwnerOrAdmin = ['santila213', 'spirit5449', 'kotpers67', 'kotpers76'].includes(cleanUsername.toLowerCase());
+        const requireTrainerApproval = isTrainerApprovalRequired();
+        const isApproved = (role === 'trainer' && requireTrainerApproval && !isOwnerOrAdmin) ? 0 : 1;
+
         if (user) {
           // Existing user found by phone or full name: link Telegram and update profile
           if (!user.telegram_username && cleanUsername) {
@@ -981,6 +1275,13 @@ const server = http.createServer(async (req, res) => {
           if (avatarBase64 && !user.avatar_base64) {
             db.updateProfile(user.id, user.full_name, user.phone, avatarBase64);
             user.avatar_base64 = avatarBase64;
+          }
+          if (user.role !== role) {
+            db.updateUserRole(user.id, role);
+            user.role = role;
+            if (role === 'trainer' && !isOwnerOrAdmin && requireTrainerApproval) {
+              user.is_approved = 0;
+            }
           }
         } else {
           const passwordHash = hashPassword(crypto.randomBytes(24).toString('hex'));
@@ -997,7 +1298,8 @@ const server = http.createServer(async (req, res) => {
             escapedPhone,
             pairingCode,
             clientUuid,
-            avatarBase64 || ''
+            avatarBase64 || '',
+            isApproved
           );
 
           if (role === 'athlete') {
@@ -1006,9 +1308,51 @@ const server = http.createServer(async (req, res) => {
 
           db.linkTelegram(userId, '', cleanUsername);
           user = db.findUserById(userId);
+
+          if (role === 'trainer') {
+            if (tgBotInstance && isApproved === 0) {
+              const adminChatIds = new Set();
+              if (process.env.ADMIN_CHAT_ID) adminChatIds.add(String(process.env.ADMIN_CHAT_ID).trim());
+              ['santila213', 'spirit5449'].forEach(adminHandle => {
+                const cId = userTgChatMap.get(adminHandle) || userTgChatMap.get(adminHandle.toLowerCase());
+                if (cId) adminChatIds.add(String(cId));
+              });
+
+              for (const adminChatId of adminChatIds) {
+                try {
+                  await tgBotInstance.api.sendMessage(
+                    adminChatId,
+                    `🔔 <b>НОВАЯ ЗАЯВКА НА АККАУНТ ТРЕНЕРА ЧЕРЕЗ TELEGRAM!</b>\n\n` +
+                    `👤 <b>Имя:</b> ${escapedFullName}\n` +
+                    `🏷 <b>Логин:</b> ${user.username}\n` +
+                    `📞 <b>Телефон:</b> ${escapedPhone || 'Не указан'}\n` +
+                    `✈ <b>Telegram:</b> @${cleanUsername}\n\n` +
+                    `Нажмите кнопку ниже или отправьте:\n<code>/approve_${userId}</code>`,
+                    {
+                      parse_mode: 'HTML',
+                      reply_markup: {
+                        inline_keyboard: [
+                          [{ text: `✅ Одобрить тренера #${userId}`, callback_data: `approve_${userId}` }]
+                        ]
+                      }
+                    }
+                  );
+                } catch (_) {}
+              }
+            }
+          }
         }
 
-        const token = generateToken();
+        if (user.role === 'trainer' && user.is_approved === 0 && !isOwnerOrAdmin) {
+          return sendJson(res, 201, {
+            success: true,
+            pendingApproval: true,
+            username: user.username,
+            message: '⏳ ЗАЯВКА НА РАССМОТРЕНИИ\nВаша заявка на создание аккаунта тренера принята!\n\nВ течение 72 часов ваша заявка будет обработана, мы свяжебся если будет необходима дополнительная информация.'
+          });
+        }
+
+        const token = generateToken(user.id, user.role);
         db.createAuthToken(token, user.id);
 
         return sendJson(res, 201, {
@@ -1048,6 +1392,25 @@ const server = http.createServer(async (req, res) => {
         }
       }
 
+      // VERSION CHECK: GET /api/version — mobile apps auto-update (Public)
+      if (pathname === '/api/version' && req.method === 'GET') {
+        const LATEST_VERSION = '2.0.1';
+        const BASE_URL = process.env.RENDER_EXTERNAL_URL || 'https://fitness-ecosystem-pro.onrender.com';
+        return sendJson(res, 200, {
+          latest: LATEST_VERSION,
+          athlete: {
+            version: LATEST_VERSION,
+            url: `${BASE_URL}/releases/athlete-pro-v${LATEST_VERSION}.apk`,
+            changelog: 'Версия 2.0.1: Pull-to-Refresh обновление как в браузере, таймер отдыха, редактирование подходов на сайте, синхронизация профиля, Telegram авторизация, 2FA защита'
+          },
+          trainer: {
+            version: LATEST_VERSION,
+            url: `${BASE_URL}/releases/trainer-pro-v${LATEST_VERSION}.apk`,
+            changelog: 'Версия 2.0.1: Pull-to-Refresh обновление как в браузере, мгновенная синхронизация, Telegram авторизация, 2FA защита, управление подходами'
+          }
+        });
+      }
+
       // AUTHENTICATED ENDPOINTS
       const user = getAuthUser(req);
       if (!user) {
@@ -1058,6 +1421,22 @@ const server = http.createServer(async (req, res) => {
       if (pathname === '/api/me' && req.method === 'GET') {
         let pairedCoach = null;
         if (user.role === 'athlete') {
+          try {
+            await cloudSyncService.syncAthleteFromCloud(user, db);
+            const refetched = db.findUserById(user.id);
+            if (refetched) {
+              user.full_name = refetched.full_name;
+              user.phone = refetched.phone;
+              user.avatar_base64 = refetched.avatar_base64;
+              user.client_uuid = refetched.client_uuid;
+              user.pairing_code = refetched.pairing_code;
+              user.pairing_code_created_at = refetched.pairing_code_created_at;
+              user.restrictions = refetched.restrictions;
+            }
+          } catch (err) {
+            console.warn('[Server] syncAthleteFromCloud error in /api/me:', err.message);
+          }
+
           const PAIRING_TTL = 5 * 60 * 1000;
           if (!user.pairing_code || (Date.now() - (user.pairing_code_created_at || 0) > PAIRING_TTL)) {
             const newPin = db.generateUniquePairingCode(user.id);
@@ -1095,10 +1474,23 @@ const server = http.createServer(async (req, res) => {
               avatar_base64: ''
             };
           }
+        } else if (user.role === 'trainer') {
+          try {
+            await cloudSyncService.syncTrainerFromCloud(user, db);
+          } catch (err) {
+            console.warn('[Server] Trainer cloud sync notice in /api/me:', err.message);
+          }
         }
         const freshUser = db.findUserById(user.id) || user;
         const normalizedUser = {
           ...freshUser,
+          fullName: freshUser.full_name,
+          pairingCode: freshUser.pairing_code,
+          avatarBase64: freshUser.avatar_base64 || '',
+          clientUuid: freshUser.client_uuid || '',
+          restrictions: freshUser.restrictions || '',
+          coachName: freshUser.coach_name || '',
+          coachPhone: freshUser.coach_phone || '',
           telegram_id: String(freshUser.telegram_id || ''),
           telegramId: String(freshUser.telegram_id || ''),
           telegram_username: String(freshUser.telegram_username || ''),
@@ -1109,15 +1501,17 @@ const server = http.createServer(async (req, res) => {
         return sendJson(res, 200, { user: normalizedUser, pairedCoach });
       }
 
-      // UPDATE PROFILE (Name, Phone, Photo/Avatar)
+      // UPDATE PROFILE (Name, Phone, Photo/Avatar, Restrictions, ClientUUID)
       if ((pathname === '/api/user/profile' || pathname === '/api/profile') && (req.method === 'PUT' || req.method === 'POST')) {
         const body = await parseJsonBody(req);
-        const { fullName, phone, avatarBase64 } = body;
+        const { fullName, phone, avatarBase64, restrictions, clientUuid } = body;
         if (avatarBase64 && avatarBase64.length > 30000) {
           return sendError(res, 400, 'Аватар слишком большой (максимум 30 КБ)');
         }
         const cleanName = String(fullName || user.full_name).trim();
         const cleanPhone = phone !== undefined ? String(phone).trim() : user.phone;
+        const cleanRestrictions = restrictions !== undefined ? String(restrictions).trim() : (user.restrictions || '');
+        const cleanClientUuid = (clientUuid && String(clientUuid).trim()) ? String(clientUuid).trim() : user.client_uuid;
 
         if (cleanName.length < 2) {
           return sendError(res, 400, 'Имя должно содержать минимум 2 символа');
@@ -1128,19 +1522,25 @@ const server = http.createServer(async (req, res) => {
 
         const escapedName = escapeHtml(cleanName);
         const escapedPhone = escapeHtml(cleanPhone);
+        const escapedRestrictions = escapeHtml(cleanRestrictions);
 
-        db.updateProfile(user.id, escapedName, escapedPhone, avatarBase64 !== undefined ? avatarBase64 : null);
+        db.updateProfile(user.id, escapedName, escapedPhone, avatarBase64 !== undefined ? avatarBase64 : null, escapedRestrictions, cleanClientUuid);
         const updatedUser = db.findUserById(user.id);
 
-        if (updatedUser.role === 'athlete' && updatedUser.pairing_code) {
-          cloudSyncService.registerAthletePairing(
-            updatedUser.pairing_code,
-            updatedUser.client_uuid,
-            updatedUser.full_name,
-            updatedUser.phone,
-            '',
-            updatedUser.avatar_base64 || ''
-          ).catch(() => {});
+        if (updatedUser.role === 'athlete') {
+          if (updatedUser.pairing_code) {
+            cloudSyncService.registerAthletePairing(
+              updatedUser.pairing_code,
+              updatedUser.client_uuid,
+              updatedUser.full_name,
+              updatedUser.phone,
+              '',
+              updatedUser.avatar_base64 || '',
+              updatedUser.restrictions || ''
+            ).catch(() => {});
+          } else if (updatedUser.client_uuid) {
+            cloudSyncService.updateAthleteRestrictions(updatedUser.client_uuid, updatedUser.restrictions || '').catch(() => {});
+          }
         }
 
         return sendJson(res, 200, {
@@ -1153,6 +1553,8 @@ const server = http.createServer(async (req, res) => {
             phone: updatedUser.phone,
             avatarBase64: updatedUser.avatar_base64,
             pairingCode: updatedUser.pairing_code,
+            restrictions: updatedUser.restrictions || '',
+            clientUuid: updatedUser.client_uuid || '',
             isPrivate: Boolean(updatedUser.is_private)
           }
         });
@@ -1298,6 +1700,72 @@ const server = http.createServer(async (req, res) => {
         });
       }
 
+      // TELEGRAM LINKING: Link via 6-digit Code from Bot (Keys menu in bot)
+      if (pathname === '/api/user/telegram/link-by-bot-code' && req.method === 'POST') {
+        const body = await parseJsonBody(req);
+        const cleanCode = String(body.code || '').trim();
+        if (cleanCode.length !== 6 || !/^\d{6}$/.test(cleanCode)) {
+          return sendError(res, 400, 'Код должен содержать ровно 6 цифр');
+        }
+
+        const now = Date.now();
+        let matchedTgId = null;
+        let matchedUsername = null;
+
+        if (telegramOtpStore) {
+          for (const [key, record] of telegramOtpStore.entries()) {
+            if (record && record.code === cleanCode && record.expiresAt > now) {
+              matchedTgId = record.tgId || record.telegramId || (key.startsWith('id_') ? key.replace('id_', '') : null);
+              matchedUsername = record.username || (key.startsWith('id_') ? null : key);
+              break;
+            }
+          }
+        }
+
+        if (!matchedTgId && !matchedUsername) {
+          const userWithPin = db.findUserByPairingCode ? db.findUserByPairingCode(cleanCode) : null;
+          if (userWithPin && (userWithPin.telegram_id || userWithPin.telegram_username)) {
+            matchedTgId = userWithPin.telegram_id;
+            matchedUsername = userWithPin.telegram_username;
+          }
+        }
+
+        if (!matchedTgId && !matchedUsername) {
+          return sendError(res, 400, 'Код не найден или срок действия (5 минут) истёк');
+        }
+
+        db.linkTelegram(user.id, matchedTgId || '', matchedUsername || '');
+        let updated = db.findUserById(user.id);
+
+        if (updated && updated.role === 'trainer' && cloudSyncService) {
+          try {
+            await cloudSyncService.syncTrainerFromCloud(updated, db);
+            updated = db.findUserById(user.id) || updated;
+          } catch (err) {
+            console.warn('[Server] Cloud sync on link-by-bot-code notice:', err.message);
+          }
+        }
+
+        if (tgBotInstance && matchedTgId) {
+          try {
+            await tgBotInstance.api.sendMessage(
+              matchedTgId,
+              `✅ <b>Telegram успешно привязан!</b>\n\n` +
+              `👤 Профиль: <b>${user.full_name || user.username}</b> (${user.role === 'trainer' ? 'Тренер' : 'Атлет'})\n` +
+              `Привязка выполнена по коду из приложения.`,
+              { parse_mode: 'HTML' }
+            );
+          } catch (_) {}
+        }
+
+        return sendJson(res, 200, {
+          success: true,
+          message: `Telegram успешно привязан${matchedUsername ? ': @' + matchedUsername : ''}`,
+          telegramUsername: updated?.telegram_username || matchedUsername || '',
+          telegramId: updated?.telegram_id || matchedTgId || ''
+        });
+      }
+
       // TELEGRAM: Unlink
       if (pathname === '/api/user/telegram/unlink' && req.method === 'POST') {
         db.unlinkTelegram(user.id);
@@ -1330,12 +1798,85 @@ const server = http.createServer(async (req, res) => {
         return sendJson(res, 200, { success: true, isPrivate: Boolean(body.isPrivate) });
       }
 
-      // UNPAIR TRAINER (Athlete)
+      // UNPAIR TRAINER (Athlete - Requires Telegram OTP confirmation)
+      if (pathname === '/api/athlete/unpair/request-otp' && req.method === 'POST') {
+        if (user.role !== 'athlete') return sendError(res, 403, 'Доступно только атлетам');
+        const freshUser = db.findUserById(user.id);
+        const tgId = freshUser.telegram_id || (userTgChatMap.get(freshUser.username) ? String(userTgChatMap.get(freshUser.username)) : null);
+
+        if (!tgId && !freshUser.telegram_username) {
+          return sendError(res, 400, 'Сначала привяжите Telegram к аккаунту в настройках профиля, чтобы получать коды подтверждения.');
+        }
+
+        const otp = generateSecureOtpWithRetry(telegramOtpStore);
+        const expiresAt = Date.now() + 5 * 60 * 1000;
+        telegramOtpStore.set(`unpair_${user.id}`, {
+          userId: user.id,
+          code: otp,
+          expiresAt,
+          attempts: 0
+        });
+
+        console.log(`[Unpair Athlete] Generated 5-minute OTP for user #${user.id}: ${otp}`);
+
+        if (tgBotInstance && (tgId || freshUser.telegram_id)) {
+          const targetId = tgId || freshUser.telegram_id;
+          tgBotInstance.api.sendMessage(
+            targetId,
+            `⚠️ <b>Подтверждение отвязки от тренера:</b>\n\n` +
+            `👉 <code>${otp}</code> 👈\n` +
+            `<i>(нажмите на код, чтобы скопировать)</i>\n\n` +
+            `⏱ Код действует <b>5 минут</b>.\n` +
+            `Введите этот код на сайте для подтверждения разрыва связи с тренером.`,
+            { parse_mode: 'HTML' }
+          ).catch(err => console.warn('[Unpair] Telegram delivery error:', err.message));
+        }
+
+        return sendJson(res, 200, {
+          success: true,
+          message: 'Код подтверждения отправлен в ваш Telegram бот',
+          debugCode: (process.env.NODE_ENV === 'test' || !process.env.BOT_TOKEN) ? otp : undefined
+        });
+      }
+
       if (pathname === '/api/athlete/unpair' && req.method === 'POST') {
         if (user.role !== 'athlete') return sendError(res, 403, 'Доступно только атлетам');
+        const freshUser = db.findUserById(user.id);
+        const hasTg = Boolean(freshUser.telegram_id || freshUser.telegram_username || userTgChatMap.has(freshUser.username));
+
+        // If Telegram is linked, enforce code verification
+        if (hasTg) {
+          const body = await parseJsonBody(req);
+          const inputCode = String(body.code || '').trim();
+          if (!inputCode) {
+            return sendError(res, 400, 'Введите 6-значный код подтверждения из Telegram');
+          }
+
+          const record = telegramOtpStore.get(`unpair_${user.id}`);
+          if (!record || Date.now() > record.expiresAt) {
+            telegramOtpStore.delete(`unpair_${user.id}`);
+            return sendError(res, 400, 'Срок действия кода истёк или код не был запрошен. Запросите код заново.');
+          }
+
+          if (record.code !== inputCode) {
+            record.attempts = (record.attempts || 0) + 1;
+            if (record.attempts >= 5) {
+              telegramOtpStore.delete(`unpair_${user.id}`);
+              return sendError(res, 429, 'Превышено количество попыток. Запросите новый код.');
+            }
+            return sendError(res, 400, 'Неверный код из Telegram');
+          }
+
+          telegramOtpStore.delete(`unpair_${user.id}`);
+        }
+
         db.unpairAthleteBySelf(user.id);
-        cloudSyncService.unpairAthlete(user.pairing_code, user.client_uuid).catch(() => {});
-        return sendJson(res, 200, { success: true, message: 'Связь с тренером разорвана' });
+        try {
+          await cloudSyncService.unpairAthlete(user.pairing_code, user.client_uuid);
+        } catch (err) {
+          console.warn('[Server] Cloud unpair notice:', err.message);
+        }
+        return sendJson(res, 200, { success: true, message: 'Связь с тренером успешно разорвана. Повторная привязка заблокирована на 24 часа.' });
       }
 
       // TRAINER: PAIR ATHLETE BY 6-DIGIT CODE (Local + Google Drive Cloud Sync)
@@ -1364,6 +1905,12 @@ const server = http.createServer(async (req, res) => {
                 return sendError(res, 400, cloudAthlete.message || 'Ошибка кода привязки');
               }
               let localUser = db.findUserByClientUuid(cloudAthlete.clientUuid);
+              if (!localUser && cloudAthlete.phone) {
+                localUser = db.findUserByPhone(cloudAthlete.phone);
+              }
+              if (!localUser && cloudAthlete.clientName && cloudAthlete.clientName !== 'Подопечный' && cloudAthlete.clientName !== 'Атлет') {
+                localUser = db.findUserByFullName(cloudAthlete.clientName);
+              }
               if (!localUser) {
                 const uniqueUsername = 'ath_' + crypto.randomBytes(6).toString('hex');
                 const uid = db.createUser(
@@ -1377,8 +1924,16 @@ const server = http.createServer(async (req, res) => {
                   cloudAthlete.avatarBase64 || ''
                 );
                 localUser = db.findUserById(uid);
-              } else if (cloudAthlete.avatarBase64 && !localUser.avatar_base64) {
-                db.updateProfile(localUser.id, localUser.full_name, localUser.phone, cloudAthlete.avatarBase64);
+              } else {
+                // Update existing user with clientUuid and avatar/restrictions to unify web and mobile accounts!
+                db.updateProfile(
+                  localUser.id,
+                  localUser.full_name || cloudAthlete.clientName,
+                  localUser.phone || cloudAthlete.phone,
+                  cloudAthlete.avatarBase64 || localUser.avatar_base64,
+                  cloudAthlete.restrictions || localUser.restrictions,
+                  cloudAthlete.clientUuid
+                );
                 localUser = db.findUserById(localUser.id);
               }
               athlete = localUser;
@@ -1404,7 +1959,62 @@ const server = http.createServer(async (req, res) => {
         });
       }
 
-      // TRAINER: UNPAIR ATHLETE
+      // TRAINER: REQUEST UNPAIR OTP (Requires Telegram OTP confirmation)
+      if (pathname === '/api/trainer/unpair/request-otp' && req.method === 'POST') {
+        if (user.role !== 'trainer') return sendError(res, 403, 'Доступно только тренерам');
+        const body = await parseJsonBody(req);
+        const athleteId = Number(body.athleteId);
+        if (!athleteId) {
+          return sendError(res, 400, 'Укажите athleteId');
+        }
+
+        const athlete = db.findUserById(athleteId);
+        if (!athlete) {
+          return sendError(res, 404, 'Подопечный не найден');
+        }
+
+        const freshUser = db.findUserById(user.id);
+        const tgId = freshUser.telegram_id || (userTgChatMap.get(freshUser.username) ? String(userTgChatMap.get(freshUser.username)) : null);
+
+        if (!tgId && !freshUser.telegram_username) {
+          return sendError(res, 400, 'Сначала привяжите Telegram к аккаунту тренера в настройках профиля, чтобы подтверждать отвязку подопечных.');
+        }
+
+        const otp = generateSecureOtpWithRetry(telegramOtpStore);
+        const expiresAt = Date.now() + 5 * 60 * 1000;
+        telegramOtpStore.set(`trainer_unpair_${user.id}_${athleteId}`, {
+          userId: user.id,
+          athleteId,
+          code: otp,
+          expiresAt,
+          attempts: 0
+        });
+
+        console.log(`[Unpair Trainer] Generated 5-minute OTP for trainer #${user.id} unpairing athlete #${athleteId}: ${otp}`);
+
+        if (tgBotInstance && (tgId || freshUser.telegram_id)) {
+          const targetId = tgId || freshUser.telegram_id;
+          const athName = athlete.full_name || athlete.username || 'Подопечный';
+          tgBotInstance.api.sendMessage(
+            targetId,
+            `⚠️ <b>Подтверждение отвязки подопечного:</b>\n\n` +
+            `Подопечный: <b>${athName}</b>\n\n` +
+            `👉 <code>${otp}</code> 👈\n` +
+            `<i>(нажмите на код, чтобы скопировать)</i>\n\n` +
+            `⏱ Код действует <b>5 минут</b>.\n` +
+            `Введите этот код на сайте для подтверждения удаления подопечного.`,
+            { parse_mode: 'HTML' }
+          ).catch(err => console.warn('[Unpair Trainer] Telegram delivery error:', err.message));
+        }
+
+        return sendJson(res, 200, {
+          success: true,
+          message: 'Код подтверждения отправлен в ваш Telegram бот',
+          debugCode: (process.env.NODE_ENV === 'test' || !process.env.BOT_TOKEN) ? otp : undefined
+        });
+      }
+
+      // TRAINER: UNPAIR ATHLETE (Enforces Telegram OTP code)
       if (pathname === '/api/trainer/unpair' && req.method === 'POST') {
         if (user.role !== 'trainer') return sendError(res, 403, 'Доступно только тренерам');
         const body = await parseJsonBody(req);
@@ -1412,18 +2022,73 @@ const server = http.createServer(async (req, res) => {
         if (!athleteId) {
           return sendError(res, 400, 'Укажите athleteId');
         }
+
+        const freshUser = db.findUserById(user.id);
+        const hasTg = Boolean(freshUser.telegram_id || freshUser.telegram_username || userTgChatMap.has(freshUser.username));
+
+        // If trainer has Telegram, require OTP confirmation
+        if (hasTg) {
+          const inputCode = String(body.code || '').trim();
+          if (!inputCode) {
+            return sendError(res, 400, 'Введите 6-значный код подтверждения из Telegram');
+          }
+
+          const record = telegramOtpStore.get(`trainer_unpair_${user.id}_${athleteId}`);
+          if (!record || Date.now() > record.expiresAt) {
+            telegramOtpStore.delete(`trainer_unpair_${user.id}_${athleteId}`);
+            return sendError(res, 400, 'Срок действия кода истёк или код не был запрошен. Запросите код заново.');
+          }
+
+          if (record.code !== inputCode) {
+            record.attempts = (record.attempts || 0) + 1;
+            if (record.attempts >= 5) {
+              telegramOtpStore.delete(`trainer_unpair_${user.id}_${athleteId}`);
+              return sendError(res, 429, 'Превышено количество попыток. Запросите новый код.');
+            }
+            return sendError(res, 400, 'Неверный код из Telegram');
+          }
+
+          telegramOtpStore.delete(`trainer_unpair_${user.id}_${athleteId}`);
+        }
+
         const athlete = db.findUserById(athleteId);
-        if (athlete && athlete.pairing_code) {
-          cloudSyncService.unpairAthlete(athlete.pairing_code, athlete.client_uuid).catch(() => {});
+        if (athlete) {
+          try {
+            await cloudSyncService.unpairAthlete(athlete.pairing_code, athlete.client_uuid);
+          } catch (err) {
+            console.warn('[Server] Cloud unpair notice:', err.message);
+          }
         }
         db.unpairTrainerAndAthlete(user.id, athleteId);
-        return sendJson(res, 200, { success: true, message: 'Связь с атлетом разорвана' });
+        return sendJson(res, 200, { success: true, message: 'Связь с атлетом разорвана. Повторная привязка заблокирована на 24 часа.' });
       }
 
       // TRAINER: GET CLIENTS
       if (pathname === '/api/trainer/clients' && req.method === 'GET') {
         if (user.role !== 'trainer') return sendError(res, 403, 'Доступно только тренерам');
-        const clients = db.getTrainerClients(user.id);
+        try {
+          await cloudSyncService.syncTrainerFromCloud(user, db);
+        } catch (err) {
+          console.warn('[Server] Trainer cloud sync notice in /api/trainer/clients:', err.message);
+        }
+        const rawClients = db.getTrainerClients(user.id);
+        const seenIds = new Set();
+        const seenUuids = new Set();
+        const seenPhones = new Set();
+        const clients = [];
+
+        for (const c of rawClients) {
+          if (seenIds.has(c.id)) continue;
+          if (c.client_uuid && seenUuids.has(c.client_uuid)) continue;
+          const cleanPhone = (c.phone || '').replace(/\D/g, '');
+          if (cleanPhone && cleanPhone.length >= 7 && seenPhones.has(cleanPhone.slice(-10))) continue;
+
+          seenIds.add(c.id);
+          if (c.client_uuid) seenUuids.add(c.client_uuid);
+          if (cleanPhone && cleanPhone.length >= 7) seenPhones.add(cleanPhone.slice(-10));
+          clients.push(c);
+        }
+
         return sendJson(res, 200, { clients });
       }
 
@@ -1440,25 +2105,9 @@ const server = http.createServer(async (req, res) => {
         return sendJson(res, 200, { success: true, athleteId, restrictions: athlete.restrictions || '' });
       }
 
-      // TRAINER: UPDATE ATHLETE RESTRICTIONS ("Строчки травмы")
+      // TRAINER: UPDATE ATHLETE RESTRICTIONS ("Строчки травмы" - read-only for trainer)
       if (pathname === '/api/trainer/athlete-restrictions' && req.method === 'POST') {
-        if (user.role !== 'trainer') return sendError(res, 403, 'Доступно только тренерам');
-        const body = await parseJsonBody(req);
-        const athleteId = Number(body.athleteId);
-        const restrictions = String(body.restrictions || '').trim();
-        if (!athleteId) return sendError(res, 400, 'Укажите athleteId');
-        if (!db.isAthletePairedToTrainer(user.id, athleteId)) {
-          return sendError(res, 403, 'Атлет не привязан к данному тренеру');
-        }
-
-        db.updateAthleteRestrictions(athleteId, restrictions);
-
-        const athlete = db.findUserById(athleteId);
-        if (athlete && athlete.client_uuid) {
-          cloudSyncService.updateAthleteRestrictions(athlete.client_uuid, restrictions).catch(() => {});
-        }
-
-        return sendJson(res, 200, { success: true, restrictions });
+        return sendError(res, 403, 'Заполнение травм и ограничений доступно только самому атлету');
       }
 
       // TRAINER: ASSIGN WORKOUT TO ATHLETE
@@ -1499,18 +2148,20 @@ const server = http.createServer(async (req, res) => {
         return sendJson(res, 200, { success: true, sessionId });
       }
 
-      // TRAINER: EXERCISE HISTORY
-      if (pathname === '/api/trainer/exercise-history' && req.method === 'GET') {
-        if (user.role !== 'trainer') return sendError(res, 403, 'Доступно только тренерам');
-        const athleteId = Number(reqUrl.searchParams.get('athleteId'));
+      // EXERCISE HISTORY (Last session stats summary)
+      if ((pathname === '/api/trainer/exercise-history' || pathname === '/api/workout/exercise-history') && req.method === 'GET') {
+        const targetAthleteId = user.role === 'athlete'
+          ? user.id
+          : Number(reqUrl.searchParams.get('athleteId'));
         const exerciseName = reqUrl.searchParams.get('exercise') || '';
-        if (!athleteId || !exerciseName) {
+        const beforeDate = reqUrl.searchParams.get('beforeDate') || null;
+        if (!targetAthleteId || !exerciseName) {
           return sendError(res, 400, 'Укажите athleteId и exercise');
         }
-        if (!db.isAthletePairedToTrainer(user.id, athleteId)) {
+        if (user.role === 'trainer' && !db.isAthletePairedToTrainer(user.id, targetAthleteId)) {
           return sendError(res, 403, 'Атлет не привязан к данному тренеру');
         }
-        const stats = db.getLastExerciseStats(athleteId, exerciseName);
+        const stats = db.getLastExerciseStats(targetAthleteId, exerciseName, beforeDate);
         return sendJson(res, 200, { stats });
       }
 
@@ -1670,6 +2321,42 @@ const server = http.createServer(async (req, res) => {
         return sendJson(res, 200, { success: true, setId, isCompleted });
       }
 
+      // WORKOUT: UPDATE SET (Weight, Reps, RPE)
+      if (pathname === '/api/workout/set' && req.method === 'PUT') {
+        const body = await parseJsonBody(req);
+        const setId = Number(body.setId);
+        if (!setId) {
+          return sendError(res, 400, 'Укажите setId');
+        }
+        const targetSet = db.getWorkoutSetById(setId);
+        if (!targetSet) {
+          return sendError(res, 404, 'Подход не найден');
+        }
+        if (user.role === 'athlete' && targetSet.athlete_id !== user.id) {
+          return sendError(res, 403, 'Доступ запрещен');
+        }
+
+        const weight = Math.max(0, Number(body.weightKg) || 0);
+        const reps = Math.max(1, Number(body.reps) || 1);
+        const rpe = Math.min(10, Math.max(1, Number(body.rpe) || 8.0));
+
+        db.updateWorkoutSet(setId, weight, reps, rpe);
+
+        // Sync to Google Drive cloud
+        const athlete = db.findUserById(targetSet.athlete_id);
+        if (athlete && athlete.client_uuid) {
+          const targetDate = targetSet.workout_date || new Date().toISOString().slice(0, 10);
+          const { session, sets } = db.getWorkoutSessionWithSets(athlete.id, targetDate);
+          try {
+            await cloudSyncService.syncWorkoutSessionToCloud(athlete.client_uuid, athlete.full_name, targetDate, session, sets);
+          } catch (err) {
+            console.warn('[Server] Cloud sync update set error:', err.message);
+          }
+        }
+
+        return sendJson(res, 200, { success: true, setId, weightKg: weight, reps, rpe });
+      }
+
       // WORKOUT: DELETE SET
       if (pathname === '/api/workout/set' && req.method === 'DELETE') {
         let setId = Number(reqUrl.searchParams.get('setId'));
@@ -1702,6 +2389,55 @@ const server = http.createServer(async (req, res) => {
         }
 
         return sendJson(res, 200, { success: true, setId });
+      }
+
+      // EXERCISES CATALOG CRUD (Mobile Parity)
+      if (pathname === '/api/exercises' && req.method === 'GET') {
+        const exercises = db.getAllExercises();
+        return sendJson(res, 200, { exercises });
+      }
+
+      if (pathname === '/api/exercises' && req.method === 'POST') {
+        if (user.role !== 'trainer') return sendError(res, 403, 'Доступно только тренерам');
+        const body = await parseJsonBody(req);
+        const name = String(body.name || '').trim();
+        const muscleGroup = String(body.muscleGroup || 'Грудь').trim();
+        const defaultRestSeconds = Number(body.defaultRestSeconds) || 90;
+        if (!name) return sendError(res, 400, 'Укажите название упражнения');
+
+        try {
+          const id = db.createExercise(name, muscleGroup, defaultRestSeconds);
+          return sendJson(res, 201, { success: true, exercise: { id, name, muscleGroup, defaultRestSeconds, isCustom: 1 } });
+        } catch (err) {
+          if (err.message && err.message.includes('UNIQUE')) {
+            return sendError(res, 400, 'Упражнение с таким названием уже существует');
+          }
+          return sendError(res, 500, err.message);
+        }
+      }
+
+      if (pathname.startsWith('/api/exercises/') && req.method === 'PUT') {
+        if (user.role !== 'trainer') return sendError(res, 403, 'Доступно только тренерам');
+        const id = Number(pathname.replace('/api/exercises/', ''));
+        if (!id) return sendError(res, 400, 'Некорректный ID упражнения');
+
+        const body = await parseJsonBody(req);
+        const name = String(body.name || '').trim();
+        const muscleGroup = String(body.muscleGroup || 'Грудь').trim();
+        const defaultRestSeconds = Number(body.defaultRestSeconds) || 90;
+        if (!name) return sendError(res, 400, 'Укажите название упражнения');
+
+        const ok = db.updateExercise(id, name, muscleGroup, defaultRestSeconds);
+        return sendJson(res, 200, { success: ok });
+      }
+
+      if (pathname.startsWith('/api/exercises/') && req.method === 'DELETE') {
+        if (user.role !== 'trainer') return sendError(res, 403, 'Доступно только тренерам');
+        const id = Number(pathname.replace('/api/exercises/', ''));
+        if (!id) return sendError(res, 400, 'Некорректный ID упражнения');
+
+        const ok = db.deleteExercise(id);
+        return sendJson(res, 200, { success: ok });
       }
 
       // PROGRESS & CHARTS: Get list of all exercises for athlete
@@ -1822,6 +2558,15 @@ const server = http.createServer(async (req, res) => {
               }
             }
           } else if (user.role === 'trainer') {
+            // First run full trainer profile and client pairing sync from cloud
+            try {
+              const trainerSyncRes = await cloudSyncService.syncTrainerFromCloud(user, db);
+              if (trainerSyncRes.syncedProfile) result.syncedItems.push('trainer_profile');
+              if (trainerSyncRes.syncedClients > 0) result.syncedItems.push(`synced_${trainerSyncRes.syncedClients}_clients`);
+            } catch (err) {
+              console.warn('[Server] Trainer sync from cloud warning:', err.message);
+            }
+
             // For trainer: iterate over clients, check cloud updates for their workouts and avatars
             const clients = db.getTrainerClients(user.id);
             const cloudData = await cloudSyncService.fetchCloudData(true);
@@ -1914,7 +2659,8 @@ const server = http.createServer(async (req, res) => {
           return fs.createReadStream(apkPath).pipe(res);
         } else {
           // Fallback: Redirect to GitHub Releases
-          const tag = fileName.includes('v1.0.6') ? 'v1.0.6' : 'v1.0.5';
+          const match = fileName.match(/v\d+\.\d+\.\d+/);
+          const tag = match ? match[0] : 'v2.0.0';
           res.writeHead(302, {
             'Location': `https://github.com/kotpers67-spec/fitness-ecosystem-pro/releases/download/${tag}/${fileName}`
           });
@@ -1963,9 +2709,39 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
+// --- 13-Minute Self-Ping Keep-Alive Engine (Anti-Sleep for Render Free Tier) ---
+function startKeepAliveEngine() {
+  const KEEP_ALIVE_INTERVAL_MS = 13 * 60 * 1000; // 13 minutes
+  const targetUrl = process.env.APP_URL || process.env.RENDER_EXTERNAL_URL || 'https://fitness-ecosystem-pro.onrender.com';
+
+  const ping = async () => {
+    try {
+      const pingUrl = `${targetUrl.replace(/\/$/, '')}/api/health`;
+      const res = await fetch(pingUrl, {
+        headers: { 'User-Agent': 'FitnessPro-KeepAlive/1.0' },
+        signal: AbortSignal.timeout(15000)
+      });
+      console.log(`[KeepAlive] ⏰ Self-ping to ${pingUrl} status: ${res.status} at ${new Date().toLocaleTimeString()}`);
+    } catch (err) {
+      console.warn(`[KeepAlive] ⚠️ Self-ping notice (${targetUrl}):`, err.message);
+    }
+  };
+
+  // Initial ping after 30 seconds to confirm network connectivity
+  const initialTimer = setTimeout(ping, 30000);
+  initialTimer.unref();
+
+  // Periodic ping every 13 minutes
+  const intervalTimer = setInterval(ping, KEEP_ALIVE_INTERVAL_MS);
+  intervalTimer.unref();
+
+  console.log(`[KeepAlive] 🛡️ Anti-sleep engine activated: self-ping every 13 minutes targeting ${targetUrl}`);
+}
+
 if (require.main === module) {
   server.listen(PORT, () => {
     console.log(`[Fitness Ecosystem Web] Server running at http://localhost:${PORT}`);
+    startKeepAliveEngine();
   });
 }
 

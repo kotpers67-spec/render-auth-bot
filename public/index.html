@@ -11,7 +11,7 @@
   <link rel="manifest" href="/manifest.json">
   <link rel="icon" type="image/svg+xml" href="/icon.svg">
   <link rel="apple-touch-icon" href="/icon-192.png">
-  <link rel="stylesheet" href="/styles.css">
+  <link rel="stylesheet" href="/styles.css?v=2.5.2">
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
 </head>
 <body>
@@ -45,7 +45,14 @@
     </header>
 
     <!-- Main Content Area (Scrollable viewport) -->
-    <main class="app-main-viewport">
+    <main class="app-main-viewport" id="app-main-viewport">
+      <!-- Native Mobile & Telegram WebApp Pull-to-Refresh Indicator -->
+      <div id="ptr-indicator" class="ptr-indicator">
+        <div class="ptr-spinner-box">
+          <span class="ptr-icon">🔄</span>
+          <span class="ptr-label">Потяните для синхронизации</span>
+        </div>
+      </div>
 
       <!-- ================= 1. AUTH SCREEN ================= -->
       <section id="screen-auth" class="screen-container">
@@ -89,6 +96,36 @@
             <div class="form-group">
               <label for="login-password" class="field-label">Пароль</label>
               <input type="password" id="login-password" class="app-input" placeholder="Введите пароль" autocomplete="current-password" required>
+            </div>
+            <div class="form-group">
+              <label class="field-label">Войти как</label>
+              <div class="role-selector-cards">
+                <label class="role-card selected" data-role="athlete">
+                  <input type="radio" name="login-role" value="athlete" checked>
+                  <div class="role-card-header">
+                    <div class="role-card-icon athlete-icon">
+                      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M6.5 6.5h11M6.5 17.5h11M4 9v6M20 9v6M2 11v2M22 11v2M12 4v16"/>
+                      </svg>
+                    </div>
+                  </div>
+                  <div class="role-card-title">АТЛЕТ</div>
+                  <div class="role-card-desc">Тренировки, отметка подходов, замеры</div>
+                </label>
+
+                <label class="role-card" data-role="trainer">
+                  <input type="radio" name="login-role" value="trainer">
+                  <div class="role-card-header">
+                    <div class="role-card-icon trainer-icon">
+                      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8zm13 0l-3.5 3.5L17 13"/>
+                      </svg>
+                    </div>
+                  </div>
+                  <div class="role-card-title">ТРЕНЕР</div>
+                  <div class="role-card-desc">Кабинет тренера, подопечные, назначение планов</div>
+                </label>
+              </div>
             </div>
             <button type="submit" class="app-btn btn-primary" id="btn-submit-login">Войти в аккаунт</button>
           </form>
@@ -205,7 +242,7 @@
             <div class="form-group" style="margin-bottom: 10px;">
               <input type="text" id="athlete-input-exercise" class="app-input" placeholder="Название упражнения" required>
             </div>
-            <div class="triple-input-grid">
+            <div class="dual-input-grid">
               <div>
                 <label class="field-label">Вес (кг)</label>
                 <input type="number" step="0.5" min="0" id="athlete-input-weight" class="app-input tabular-nums" placeholder="80" required>
@@ -213,10 +250,6 @@
               <div>
                 <label class="field-label">Повторы</label>
                 <input type="number" step="1" min="1" id="athlete-input-reps" class="app-input tabular-nums" placeholder="10" required>
-              </div>
-              <div>
-                <label class="field-label">RPE</label>
-                <input type="number" step="0.5" min="1" max="10" id="athlete-input-rpe" class="app-input tabular-nums" value="8.0">
               </div>
             </div>
             <button type="submit" class="app-btn btn-primary" style="margin-top: 10px;">Добавить подход</button>
@@ -304,11 +337,17 @@
             </div>
           </div>
 
-          <!-- Chart Legend (3 шкалы) -->
-          <div class="chart-legend-row">
-            <div class="legend-item"><span class="legend-line line-weight"></span> Рабочий вес (кг)</div>
-            <div class="legend-item"><span class="legend-line line-sets"></span> Подходы (кол-во)</div>
-            <div class="legend-item"><span class="legend-line line-reps"></span> Повторения</div>
+          <!-- Chart Legend (3 шкалы, переключаемые нажатием) -->
+          <div class="chart-legend-row" id="athlete-chart-legend">
+            <button type="button" class="legend-item legend-btn active" id="btn-toggle-metric-weight" title="Нажмите, чтобы скрыть/показать вес">
+              <span class="legend-line line-weight"></span> Рабочий вес (кг)
+            </button>
+            <button type="button" class="legend-item legend-btn active" id="btn-toggle-metric-sets" title="Нажмите, чтобы скрыть/показать подходы">
+              <span class="legend-line line-sets"></span> Подходы (кол-во)
+            </button>
+            <button type="button" class="legend-item legend-btn active" id="btn-toggle-metric-reps" title="Нажмите, чтобы скрыть/показать повторения">
+              <span class="legend-line line-reps"></span> Повторения
+            </button>
           </div>
         </div>
 
@@ -329,14 +368,10 @@
         </div>
 
         <!-- Metrics Bento -->
-        <div class="metrics-bento bento-grid">
+        <div class="metrics-bento bento-grid" style="grid-template-columns: 1fr 1fr;">
           <div class="metric-card">
             <span class="metric-value tabular-nums" id="user-metric-workouts">0</span>
             <span class="metric-label">Тренировок</span>
-          </div>
-          <div class="metric-card">
-            <span class="metric-value tabular-nums" id="user-metric-tonnage">0 т</span>
-            <span class="metric-label">Тоннаж</span>
           </div>
           <div class="metric-card highlight">
             <span class="metric-value tabular-nums" id="user-metric-points">0</span>
@@ -369,6 +404,11 @@
               <h3 class="profile-name" id="profile-full-name">Атлет</h3>
               <span class="profile-sub" id="profile-username">@username</span>
               <span class="profile-sub" id="profile-phone">+7 999 000-00-00</span>
+              <div id="profile-restrictions-badge-row" style="margin-top: 6px; display: none;">
+                <span class="role-card-tag" style="background: rgba(244, 63, 94, 0.15); color: #f43f5e; border: 1px solid rgba(244, 63, 94, 0.3); font-size: 11px; padding: 3px 8px; border-radius: 6px; display: inline-block;">
+                  ⚠️ Травмы: <span id="profile-restrictions-display" style="font-weight: normal; color: var(--text-primary);"></span>
+                </span>
+              </div>
             </div>
           </div>
 
@@ -385,6 +425,10 @@
             <div class="form-group" style="margin-bottom: 12px;">
               <label class="field-label">Номер телефона</label>
               <input type="tel" id="athlete-edit-phone" class="app-input" placeholder="+7 999 000-00-00">
+            </div>
+            <div class="form-group" style="margin-bottom: 12px;">
+              <label class="field-label">Ограничения и травмы</label>
+              <textarea id="athlete-edit-restrictions" class="app-input" rows="2" placeholder="Например: Без осевых нагрузок, травма правого плеча..."></textarea>
             </div>
             <button id="btn-save-athlete-profile" class="app-btn btn-primary">Сохранить изменения</button>
           </div>
@@ -542,16 +586,17 @@
           </div>
         </div>
 
-        <!-- Card: Athlete Injuries & Restrictions ("Строчки травмы") -->
-        <div class="app-card" id="card-trainer-restrictions" style="display: none;">
-          <div class="card-title">ТРАВМЫ И ОГРАНИЧЕНИЯ АТЛЕТА</div>
-          <p class="card-desc">Укажите противопоказания, травмы или особенности атлета</p>
-          <form id="form-trainer-restrictions">
-            <div class="form-group" style="margin-bottom: 10px;">
-              <textarea id="input-athlete-restrictions" class="app-input" rows="3" placeholder="Например: Травма колена, избегать осевых нагрузок..."></textarea>
+        <!-- Card: Athlete Injuries & Restrictions ("Строчки травмы" - Read-Only Warning Banner) -->
+        <div class="app-card restrictions-warning-card" id="card-trainer-restrictions" style="display: none; background: #231C13; border: 1px solid rgba(245, 158, 11, 0.7); border-radius: 14px; padding: 14px;">
+          <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px;">
+            <div style="display: inline-flex; align-items: center; gap: 5px; background: rgba(245, 158, 11, 0.22); padding: 3px 8px; border-radius: 6px;">
+              <span style="color: #F59E0B; font-size: 13px;">⚠️</span>
+              <span style="color: #F59E0B; font-size: 10px; font-weight: 900; letter-spacing: 0.8px;">ОГРАНИЧЕНИЯ / ТРАВМЫ</span>
             </div>
-            <button type="submit" class="app-btn btn-primary">Сохранить ограничения</button>
-          </form>
+            <span style="color: rgba(245, 158, 11, 0.8); font-size: 9px; font-weight: 700; letter-spacing: 0.5px;">ПРОТИВОПОКАЗАНИЯ</span>
+          </div>
+          <div id="text-athlete-restrictions" style="font-size: 13px; font-weight: 600; color: #FDFDFD; line-height: 18px; margin-bottom: 4px; white-space: pre-wrap;"></div>
+          <div style="font-size: 10px; color: #D4A373;">Учитывайте противопоказания при подборе упражнений и рабочих весов (заполняется атлетом)</div>
         </div>
 
         <!-- Add Client Card (Pairing by 6-digit PIN) -->
@@ -577,7 +622,13 @@
 
         <!-- Clients List Card -->
         <div class="app-card">
-          <div class="card-title">СПИСОК ПОДОПЕЧНЫХ</div>
+          <div style="display: flex; align-items: center; justify-content: space-between;">
+            <div class="card-title" id="trainer-clients-title">СПИСОК ПОДОПЕЧНЫХ</div>
+            <span class="role-card-tag" id="trainer-clients-count-badge" style="background: rgba(200, 255, 0, 0.12); color: var(--accent-lime); border: 1px solid rgba(200, 255, 0, 0.3); font-size: 11px; padding: 2px 8px; border-radius: 6px;">0</span>
+          </div>
+          <div style="margin: 4px 0 6px;">
+            <input type="text" id="trainer-clients-search" class="app-input" placeholder="🔍 Поиск подопечного по имени или телефону..." style="padding: 9px 12px; font-size: 13px;">
+          </div>
           <div class="clients-list" id="trainer-clients-list">
             <!-- Dynamic client items -->
           </div>
@@ -600,6 +651,19 @@
         <!-- Active Client Notice -->
         <div class="notice-card" id="trainer-workout-target-notice">
           Подопечный не выбран. Выберите подопечного во вкладке «Подопечные».
+        </div>
+
+        <!-- Athlete Restrictions Warning Banner (Workout Screen - Mobile Parity) -->
+        <div class="app-card restrictions-warning-card" id="trainer-workout-restrictions-banner" style="display: none; background: #231C13; border: 1px solid rgba(245, 158, 11, 0.7); border-radius: 14px; padding: 14px; margin-bottom: 12px;">
+          <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px;">
+            <div style="display: inline-flex; align-items: center; gap: 5px; background: rgba(245, 158, 11, 0.22); padding: 3px 8px; border-radius: 6px;">
+              <span style="color: #F59E0B; font-size: 13px;">⚠️</span>
+              <span style="color: #F59E0B; font-size: 10px; font-weight: 900; letter-spacing: 0.8px;">ОГРАНИЧЕНИЯ / ТРАВМЫ</span>
+            </div>
+            <span style="color: rgba(245, 158, 11, 0.8); font-size: 9px; font-weight: 700; letter-spacing: 0.5px;">ПРОТИВОПОКАЗАНИЯ</span>
+          </div>
+          <div id="trainer-workout-restrictions-text" style="font-size: 13px; font-weight: 600; color: #FDFDFD; line-height: 18px; margin-bottom: 4px; white-space: pre-wrap;"></div>
+          <div style="font-size: 10px; color: #D4A373;">Учитывайте противопоказания при подборе упражнений и рабочих весов</div>
         </div>
 
         <!-- Date Bar -->
@@ -629,10 +693,11 @@
           </div>
 
           <form id="form-trainer-add-set">
-            <div class="form-group" style="margin-bottom: 10px;">
-              <input type="text" id="trainer-input-exercise" class="app-input" placeholder="Название упражнения" required>
+            <div class="form-group" style="margin-bottom: 10px; position: relative;">
+              <input type="text" id="trainer-input-exercise" class="app-input" placeholder="🔍 Название или поиск упражнения..." autocomplete="off" required>
+              <div id="trainer-exercise-search-results" class="exercise-search-dropdown" style="display: none;"></div>
             </div>
-            <div class="triple-input-grid">
+            <div class="double-input-grid" style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
               <div>
                 <label class="field-label">Целевой вес (кг)</label>
                 <input type="number" step="0.5" min="0" id="trainer-input-weight" class="app-input tabular-nums" placeholder="80" required>
@@ -640,10 +705,6 @@
               <div>
                 <label class="field-label">Целевые повторы</label>
                 <input type="number" step="1" min="1" id="trainer-input-reps" class="app-input tabular-nums" placeholder="10" required>
-              </div>
-              <div>
-                <label class="field-label">RPE</label>
-                <input type="number" step="0.5" min="1" max="10" id="trainer-input-rpe" class="app-input tabular-nums" value="8.0">
               </div>
             </div>
             <button type="submit" class="app-btn btn-primary" style="margin-top: 10px;">Назначить подход</button>
@@ -729,11 +790,17 @@
             </div>
           </div>
 
-          <!-- Chart Legend (3 шкалы) -->
-          <div class="chart-legend-row">
-            <div class="legend-item"><span class="legend-line line-weight"></span> Рабочий вес (кг)</div>
-            <div class="legend-item"><span class="legend-line line-sets"></span> Подходы (кол-во)</div>
-            <div class="legend-item"><span class="legend-line line-reps"></span> Повторения</div>
+          <!-- Chart Legend (3 шкалы, переключаемые нажатием) -->
+          <div class="chart-legend-row" id="trainer-chart-legend">
+            <button type="button" class="legend-item legend-btn active" id="btn-trainer-toggle-metric-weight" title="Нажмите, чтобы скрыть/показать вес">
+              <span class="legend-line line-weight"></span> Рабочий вес (кг)
+            </button>
+            <button type="button" class="legend-item legend-btn active" id="btn-trainer-toggle-metric-sets" title="Нажмите, чтобы скрыть/показать подходы">
+              <span class="legend-line line-sets"></span> Подходы (кол-во)
+            </button>
+            <button type="button" class="legend-item legend-btn active" id="btn-trainer-toggle-metric-reps" title="Нажмите, чтобы скрыть/показать повторения">
+              <span class="legend-line line-reps"></span> Повторения
+            </button>
           </div>
         </div>
 
@@ -795,6 +862,34 @@
           </button>
         </div>
 
+        <!-- Exercise Catalog Management (Mobile Parity CRUD) -->
+        <div class="app-card" id="card-trainer-exercises-catalog">
+          <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px;">
+            <div style="display: flex; align-items: center; gap: 8px;">
+              <span style="font-size: 18px;">🏋️</span>
+              <div class="card-title" id="trainer-catalog-title" style="margin: 0;">КАТАЛОГ УПРАЖНЕНИЙ (0)</div>
+            </div>
+            <button type="button" class="btn-action-pill btn-action-primary" id="btn-open-add-exercise" style="padding: 8px 14px; font-size: 12px;">
+              <span>➕ Добавить упражнение</span>
+            </button>
+          </div>
+          <p class="card-desc">Управление упражнениями для назначения подопечным (добавление, редактирование, удаление).</p>
+
+          <div style="margin: 10px 0 8px;">
+            <input type="text" id="trainer-catalog-search" class="app-input" placeholder="🔍 Поиск упражнения..." style="padding: 8px 12px; font-size: 13px;">
+          </div>
+
+          <!-- Dynamic Muscle Group Filter Chips (Rendered dynamically when exercises exist) -->
+          <div class="chip-scroll-row" id="trainer-catalog-group-chips" style="margin-bottom: 12px; display: none; gap: 6px; overflow-x: auto; padding-bottom: 4px;"></div>
+
+          <!-- Exercise List Container -->
+          <div id="trainer-catalog-list" class="catalog-list" style="display: flex; flex-direction: column; gap: 8px;">
+            <div style="font-size: 12px; color: var(--text-muted); text-align: center; padding: 16px;">
+              Упражнения не найдены. Нажмите «+ Добавить» для создания упражнения.
+            </div>
+          </div>
+        </div>
+
         <!-- Telegram & 2FA Security Card -->
         <div class="app-card">
           <div class="card-title">TELEGRAM И БЕЗОПАСНОСТЬ (2FA)</div>
@@ -845,10 +940,42 @@
           
           <!-- STEP 0: 1-Click Instant Login (Default) -->
           <div id="tg-step-oneclick">
-            <div class="dialog-title">ВХОД В 1 КЛИК ЧЕРЕЗ TELEGRAM</div>
-            <p class="dialog-subtitle">Нажмите кнопку для быстрого входа через бота <b>@fitnessecosystemBOT</b> без ввода кодов:</p>
-            
-            <div style="margin: 16px 0 12px;">
+            <div class="dialog-title">ВХОД ЧЕРЕЗ TELEGRAM</div>
+            <p class="dialog-subtitle">Выберите вашу роль и войдите через бота <b>@fitnessecosystemBOT</b>:</p>
+
+            <!-- Role choice for Telegram Auth -->
+            <div class="form-group" style="margin-bottom: 14px;">
+              <div class="role-selector-cards">
+                <label class="role-card selected" data-tg-role="athlete" style="padding: 10px;">
+                  <input type="radio" name="tg-auth-role" value="athlete" checked>
+                  <div class="role-card-header" style="margin-bottom: 4px;">
+                    <div class="role-card-icon athlete-icon" style="width: 28px; height: 28px;">
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M6.5 6.5h11M6.5 17.5h11M4 9v6M20 9v6M2 11v2M22 11v2M12 4v16"/>
+                      </svg>
+                    </div>
+                  </div>
+                  <div class="role-card-title" style="font-size: 13px;">АТЛЕТ</div>
+                  <div class="role-card-desc" style="font-size: 10px;">Дневник, замеры, рейтинг</div>
+                </label>
+
+                <label class="role-card" data-tg-role="trainer" style="padding: 10px;">
+                  <input type="radio" name="tg-auth-role" value="trainer">
+                  <div class="role-card-header" style="margin-bottom: 4px;">
+                    <div class="role-card-icon trainer-icon" style="width: 28px; height: 28px;">
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8zm13 0l-3.5 3.5L17 13"/>
+                      </svg>
+                    </div>
+                    <span class="role-card-tag approval-tag" style="font-size: 9px; padding: 2px 4px;">72 ЧАСА</span>
+                  </div>
+                  <div class="role-card-title" style="font-size: 13px;">ТРЕНЕР</div>
+                  <div class="role-card-desc" style="font-size: 10px;">Подопечные, заявка 72ч</div>
+                </label>
+              </div>
+            </div>
+
+            <div style="margin: 12px 0 12px;">
               <a id="btn-tg-oneclick-open" href="#" target="_blank" class="app-btn btn-telegram" style="display: flex; align-items: center; justify-content: center; gap: 8px; font-size: 15px; font-weight: 700; padding: 14px; text-decoration: none; width: 100%; box-shadow: 0 4px 18px rgba(0, 136, 204, 0.35);">
                 <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor">
                   <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm4.64 6.8c-.15 1.58-.8 5.42-1.13 7.19-.14.75-.42 1-.68 1.03-.58.05-1.02-.38-1.58-.75-.88-.58-1.38-.94-2.23-1.5-.99-.65-.35-1.01.22-1.59.15-.15 2.71-2.48 2.76-2.69a.2.2 0 00-.05-.18c-.06-.05-.14-.03-.21-.02-.09.02-1.49.95-4.22 2.79-.4.27-.76.41-1.08.4-.36-.01-1.04-.2-1.55-.37-.63-.2-1.12-.31-1.08-.66.02-.18.27-.36.75-.55 2.92-1.27 4.86-2.11 5.83-2.51 2.78-1.16 3.35-1.36 3.73-1.36.08 0 .27.02.39.12.1.08.13.19.14.27-.01.06.01.24 0 .38z"/>
@@ -860,11 +987,6 @@
             <div class="tg-status-box" style="margin-bottom: 14px; padding: 10px 14px; background: rgba(0, 136, 204, 0.08); border: 1px dashed rgba(0, 136, 204, 0.3); border-radius: 10px; display: flex; align-items: center; justify-content: center; gap: 8px;">
               <span class="tg-pulse-dot" style="display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #0088cc; box-shadow: 0 0 8px #0088cc;"></span>
               <span id="tg-oneclick-status-text" style="font-size: 13px; color: var(--text-primary);">Ожидание перехода в Telegram...</span>
-            </div>
-
-            <div id="tg-oneclick-qr-container" style="text-align: center; margin-bottom: 14px; display: none;">
-              <div id="tg-oneclick-qr-svg" style="display: inline-block; padding: 6px; background: #ffffff; border-radius: 10px; line-height: 0;"></div>
-              <div style="font-size: 11px; color: var(--text-muted); margin-top: 4px;">Или отсканируйте QR-код камерой</div>
             </div>
 
             <div class="auth-divider" style="margin: 12px 0 8px;">
@@ -1068,12 +1190,12 @@
             <div class="download-apk-card">
               <div class="apk-card-header">
                 <span class="apk-badge">АТЛЕТ</span>
-                <span class="apk-version">v1.0.9 (Latest)</span>
+                <span class="apk-version">v2.0.1 (Latest)</span>
               </div>
               <h4 class="apk-title">Athlete Pro для Android</h4>
               <p class="apk-desc">Дневник тренировок, замеры веса, QR/PIN привязка к тренеру и таблица рекордов.</p>
-              <a href="https://github.com/kotpers67-spec/fitness-ecosystem-pro/releases/download/v1.0.9/athlete-pro-v1.0.9.apk" class="app-btn btn-primary" download style="display: flex; align-items: center; justify-content: center; gap: 8px; text-decoration: none;">
-                <span>⬇ Скачать Athlete Pro APK (v1.0.9)</span>
+              <a href="https://github.com/kotpers67-spec/fitness-ecosystem-pro/releases/download/v2.0.1/athlete-pro-v2.0.1.apk" class="app-btn btn-primary" download style="display: flex; align-items: center; justify-content: center; gap: 8px; text-decoration: none;">
+                <span>⬇ Скачать Athlete Pro APK (v2.0.1)</span>
               </a>
             </div>
 
@@ -1081,12 +1203,12 @@
             <div class="download-apk-card" style="margin-top: 12px;">
               <div class="apk-card-header">
                 <span class="apk-badge" style="background: rgba(16, 185, 129, 0.2); color: var(--accent-emerald);">ТРЕНЕР</span>
-                <span class="apk-version">v1.0.9 (Latest)</span>
+                <span class="apk-version">v2.0.1 (Latest)</span>
               </div>
               <h4 class="apk-title">Trainer Pro для Android</h4>
               <p class="apk-desc">Управление подопечными, назначение программ тренировок, сканер QR и мгновенная синхронизация.</p>
-              <a href="https://github.com/kotpers67-spec/fitness-ecosystem-pro/releases/download/v1.0.9/trainer-pro-v1.0.9.apk" class="app-btn btn-secondary" download style="display: flex; align-items: center; justify-content: center; gap: 8px; text-decoration: none;">
-                <span>⬇ Скачать Trainer Pro APK (v1.0.9)</span>
+              <a href="https://github.com/kotpers67-spec/fitness-ecosystem-pro/releases/download/v2.0.1/trainer-pro-v2.0.1.apk" class="app-btn btn-secondary" download style="display: flex; align-items: center; justify-content: center; gap: 8px; text-decoration: none;">
+                <span>⬇ Скачать Trainer Pro APK (v2.0.1)</span>
               </a>
             </div>
 
@@ -1112,7 +1234,152 @@
         </div>
       </dialog>
 
+      <!-- DIALOG: Статистика и история упражнения (Mobile Parity) -->
+      <dialog id="dialog-exercise-history" class="app-dialog">
+        <div class="dialog-content">
+          <div class="dialog-header">
+            <div style="display: flex; align-items: center; gap: 8px;">
+              <span style="font-size: 18px;">📊</span>
+              <h3 class="dialog-title" id="exercise-history-dialog-title">Статистика упражнения</h3>
+            </div>
+            <button type="button" class="dialog-close-btn" id="btn-close-exercise-history" aria-label="Закрыть">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                <line x1="18" y1="6" x2="6" y2="18"></line>
+                <line x1="6" y1="6" x2="18" y2="18"></line>
+              </svg>
+            </button>
+          </div>
+          <div id="exercise-history-modal-body" style="padding-top: 10px;">
+            <!-- Rendered dynamically -->
+          </div>
+          <div class="dialog-actions" style="margin-top: 16px;">
+            <button type="button" class="app-btn btn-secondary" id="btn-dismiss-exercise-history" style="width: 100%;">Закрыть</button>
+          </div>
+        </div>
+      </dialog>
+
+      <!-- DIALOG: Быстрое добавление подхода к упражнению (Mobile Parity) -->
+      <dialog id="dialog-add-set" class="app-dialog">
+        <div class="dialog-content">
+          <div class="dialog-header">
+            <div style="display: flex; align-items: center; gap: 8px;">
+              <span style="font-size: 18px;">➕</span>
+              <h3 class="dialog-title" id="add-set-dialog-title">Добавить подход</h3>
+            </div>
+            <button type="button" class="dialog-close-btn" id="btn-close-add-set-dialog" aria-label="Закрыть">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                <line x1="18" y1="6" x2="6" y2="18"></line>
+                <line x1="6" y1="6" x2="18" y2="18"></line>
+              </svg>
+            </button>
+          </div>
+          <form id="form-quick-add-set" style="margin-top: 10px;">
+            <input type="hidden" id="quick-add-set-exercise-name">
+            <div class="double-input-grid" style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 14px;">
+              <div>
+                <label class="field-label">Вес (кг) *</label>
+                <input type="number" step="0.5" min="0" id="quick-add-set-weight" class="app-input tabular-nums" placeholder="20" required>
+              </div>
+              <div>
+                <label class="field-label">Повторы *</label>
+                <input type="number" step="1" min="1" id="quick-add-set-reps" class="app-input tabular-nums" placeholder="10" required>
+              </div>
+            </div>
+            <div class="dialog-actions">
+              <button type="button" class="app-btn btn-secondary" id="btn-cancel-quick-add-set">Отмена</button>
+              <button type="submit" class="app-btn btn-primary">+ Добавить подход</button>
+            </div>
+          </form>
+        </div>
+      </dialog>
+
+      <!-- DIALOG: Добавить / Редактировать упражнение (Mobile Parity) -->
+      <dialog id="dialog-edit-exercise" class="app-dialog">
+        <div class="dialog-content">
+          <div class="dialog-header">
+            <h3 class="dialog-title" id="dialog-edit-exercise-title">Новое упражнение</h3>
+            <button type="button" class="dialog-close-btn" id="btn-close-exercise-dialog" aria-label="Закрыть">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                <line x1="18" y1="6" x2="6" y2="18"></line>
+                <line x1="6" y1="6" x2="18" y2="18"></line>
+              </svg>
+            </button>
+          </div>
+          <form id="form-edit-exercise" style="margin-top: 10px;">
+            <input type="hidden" id="edit-exercise-id">
+            <div class="form-group" style="margin-bottom: 12px;">
+              <label class="field-label">Название упражнения *</label>
+              <input type="text" id="edit-exercise-name" class="app-input" placeholder="Например: Жим лежа на брусьях" required>
+            </div>
+            <div class="form-group" style="margin-bottom: 12px;">
+              <label class="field-label">Группа мышц (введите свою)</label>
+              <input type="text" id="edit-exercise-group" class="app-input" list="muscle-groups-suggestions" placeholder="Например: Грудь, Трапеции, Икры, Кардио..." required>
+              <datalist id="muscle-groups-suggestions">
+                <option value="Грудь">
+                <option value="Спина">
+                <option value="Ноги">
+                <option value="Плечи">
+                <option value="Руки">
+                <option value="Пресс/Кор">
+                <option value="Кардио">
+              </datalist>
+            </div>
+            <div class="form-group" style="margin-bottom: 16px;">
+              <label class="field-label">Время отдыха (секунды)</label>
+              <input type="number" min="0" max="600" step="5" id="edit-exercise-rest" class="app-input tabular-nums" placeholder="90" value="90">
+            </div>
+            <div class="dialog-actions">
+              <button type="button" class="app-btn btn-secondary" id="btn-cancel-edit-exercise">Отмена</button>
+              <button type="submit" class="app-btn btn-primary" id="btn-save-exercise">Сохранить</button>
+            </div>
+          </form>
+        </div>
+      </dialog>
+
+      <!-- DIALOG: Подтверждение отвязки кодом из Telegram (Zero-Mocks Security) -->
+      <dialog id="dialog-unpair-confirm" class="app-dialog">
+        <div class="dialog-content">
+          <div class="dialog-header">
+            <h3 class="dialog-title" id="dialog-unpair-title">ОТВЯЗКА ОТ ТРЕНЕРА</h3>
+            <button type="button" class="dialog-close-btn" id="btn-close-unpair-dialog" aria-label="Закрыть">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                <line x1="18" y1="6" x2="6" y2="18"></line>
+                <line x1="6" y1="6" x2="18" y2="18"></line>
+              </svg>
+            </button>
+          </div>
+          <p class="card-desc" id="dialog-unpair-desc" style="margin: 8px 0 12px; line-height: 1.4;">
+            Для безопасности разрыв связи требует подтверждения. Мы отправили 6-значный код в ваш привязанный Telegram бот.
+          </p>
+          <div class="tg-timer-badge" id="unpair-tg-timer-display" style="margin-bottom: 14px;">⏱ Действует: 05:00</div>
+          <form id="form-unpair-confirm">
+            <div class="form-group" style="margin-bottom: 16px;">
+              <label class="field-label">6-значный код подтверждения из Telegram</label>
+              <input type="text" id="unpair-input-code" class="app-input pin-input-field tabular-nums" placeholder="123456" maxlength="6" inputmode="numeric" required autocomplete="one-time-code">
+            </div>
+            <div class="dialog-actions">
+              <button type="button" class="app-btn btn-secondary" id="btn-cancel-unpair-dialog">Отмена</button>
+              <button type="submit" class="app-btn btn-danger" id="btn-submit-unpair-confirm">Разорвать связь</button>
+            </div>
+          </form>
+        </div>
+      </dialog>
     </main>
+
+    <!-- Floating Rest Timer Banner (Athlete Pro Parity) -->
+    <div id="rest-timer-banner" class="rest-timer-banner" style="display: none;">
+      <div class="rest-timer-left">
+        <span class="rest-timer-icon">⏱️</span>
+        <div>
+          <div class="rest-timer-text">ОТДЫХ МЕЖДУ ПОДХОДАМИ</div>
+          <div class="rest-timer-digits" id="rest-timer-digits">01:30</div>
+        </div>
+      </div>
+      <div class="rest-timer-actions">
+        <button type="button" class="rest-timer-btn" id="btn-timer-add-30">+30 сек</button>
+        <button type="button" class="rest-timer-btn btn-cancel" id="btn-timer-cancel" title="Отменить таймер">✕</button>
+      </div>
+    </div>
 
     <!-- Bottom Navigation Bar (Jetpack Compose NavigationBar Style) -->
     <nav class="app-bottom-nav" id="app-bottom-nav" style="display: none;">
@@ -1125,7 +1392,7 @@
   </div>
 
   <script src="/qrcode.min.js"></script>
-  <script src="/qr.js"></script>
-  <script src="/app.js"></script>
+  <script src="/qr.js?v=2.5.2"></script>
+  <script src="/app.js?v=2.5.2"></script>
 </body>
 </html>

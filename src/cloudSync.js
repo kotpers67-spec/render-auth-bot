@@ -66,24 +66,35 @@ class CloudSyncService {
       const timeoutId = setTimeout(() => ac.abort(), 20000);
       const res = await fetch(this.getCloudUrl(), {
         signal: ac.signal,
-        headers: { 'User-Agent': 'FitnessEcosystemWeb/1.0.5' }
+        headers: { 'User-Agent': 'FitnessEcosystemWeb/1.0.5' },
+        redirect: 'follow'
       });
       clearTimeout(timeoutId);
 
       if (res.ok) {
         const text = await res.text();
-        const decrypted = decryptPayload(text);
-        const parsed = JSON.parse(decrypted || '{}');
-        this.cachedCloudData = parsed;
-        this.lastFetchTime = now;
-        return parsed;
+        if (text && text.startsWith('ENC:')) {
+          const decrypted = decryptPayload(text);
+          const parsed = JSON.parse(decrypted || '{}');
+          if (parsed && typeof parsed === 'object') {
+            this.cachedCloudData = parsed;
+            this.lastFetchTime = now;
+            return parsed;
+          }
+        } else if (text && text.trim().startsWith('{')) {
+          const parsed = JSON.parse(text);
+          if (parsed && typeof parsed === 'object') {
+            this.cachedCloudData = parsed;
+            this.lastFetchTime = now;
+            return parsed;
+          }
+        }
       }
     } catch (err) {
       console.warn('[CloudSync] Fetch failed, using fallback or cache:', err.message);
-      if (this.cachedCloudData) return this.cachedCloudData;
     }
 
-    return { clients: {}, pairing: {}, updates: {} };
+    return this.cachedCloudData || { clients: {}, pairing: {}, updates: {} };
   }
 
   async pushCloudData(rootObj) {
@@ -117,7 +128,7 @@ class CloudSyncService {
   /**
    * Register or update athlete in cloud pairing registry
    */
-  async registerAthletePairing(pin, clientUuid, clientName, phone = '', goal = '', avatarBase64 = '') {
+  async registerAthletePairing(pin, clientUuid, clientName, phone = '', goal = '', avatarBase64 = '', restrictions = '') {
     const cloud = await this.fetchCloudData(true);
     if (!cloud.pairing) cloud.pairing = {};
 
@@ -137,7 +148,7 @@ class CloudSyncService {
       phone: phone || '',
       goal: goal || '',
       avatarBase64: avatarBase64 || '',
-      restrictions: '',
+      restrictions: restrictions || '',
       notes: '',
       timestamp: Date.now(),
       status: 'PENDING'
@@ -150,6 +161,7 @@ class CloudSyncService {
         clientName: clientName || 'Атлет',
         phone: phone || '',
         avatarBase64: avatarBase64 || '',
+        restrictions: restrictions || '',
         syncTimestamp: Date.now(),
         assignedWorkouts: [],
         anthropometry: []
@@ -158,6 +170,7 @@ class CloudSyncService {
       cloud.clients[clientUuid].clientName = clientName || cloud.clients[clientUuid].clientName;
       if (phone) cloud.clients[clientUuid].phone = phone;
       if (avatarBase64) cloud.clients[clientUuid].avatarBase64 = avatarBase64;
+      if (restrictions !== undefined && restrictions !== null) cloud.clients[clientUuid].restrictions = restrictions;
     }
 
     await this.pushCloudData(cloud);
@@ -239,14 +252,47 @@ class CloudSyncService {
    * Unpair athlete from cloud
    */
   async unpairAthlete(pin, clientUuid) {
-    const cloud = await this.fetchCloudData(true);
-    if (cloud.pairing && cloud.pairing[pin]) {
-      cloud.pairing[pin].status = 'UNPAIRED';
-      delete cloud.pairing[pin].coachName;
-      delete cloud.pairing[pin].coachPhone;
+    try {
+      const cloud = await this.fetchCloudData(true);
+      const cleanPin = pin ? String(pin).replace(/\D/g, '') : '';
+
+      // 1. Clear pairing record if exists
+      if (cloud.pairing) {
+        if (cleanPin && cloud.pairing[cleanPin]) {
+          cloud.pairing[cleanPin].status = 'UNPAIRED';
+          delete cloud.pairing[cleanPin].coachName;
+          delete cloud.pairing[cleanPin].coachPhone;
+          delete cloud.pairing[cleanPin].coachAvatarBase64;
+        }
+        // Search by clientUuid if pin didn't match
+        if (clientUuid) {
+          for (const p of Object.values(cloud.pairing)) {
+            if (p && p.clientUuid === clientUuid) {
+              p.status = 'UNPAIRED';
+              delete p.coachName;
+              delete p.coachPhone;
+              delete p.coachAvatarBase64;
+            }
+          }
+        }
+      }
+
+      // 2. Clear coach info in cloud.clients
+      if (cloud.clients) {
+        if (clientUuid && cloud.clients[clientUuid]) {
+          delete cloud.clients[clientUuid].coachName;
+          delete cloud.clients[clientUuid].coachPhone;
+          delete cloud.clients[clientUuid].coachAvatarBase64;
+          cloud.clients[clientUuid].syncTimestamp = Date.now();
+        }
+      }
+
+      await this.pushCloudData(cloud);
+      return true;
+    } catch (err) {
+      console.warn('[CloudSync] unpairAthlete error:', err.message);
+      return false;
     }
-    await this.pushCloudData(cloud);
-    return true;
   }
 
   /**
@@ -589,7 +635,7 @@ class CloudSyncService {
         const workouts = Array.isArray(entry.assignedWorkouts) ? entry.assignedWorkouts : [];
         const completedWorkouts = workouts.filter(w => w.completed || (w.exercises && w.exercises.some(e => e.sets && e.sets.some(s => s.isCompleted))));
         
-        let tonnage = 0;
+        let weightGain = 0;
         for (const w of workouts) {
           if (!w.exercises) continue;
           for (const ex of w.exercises) {
@@ -597,20 +643,21 @@ class CloudSyncService {
             for (const s of ex.sets) {
               if (s.isCompleted) {
                 const wt = Number(s.actualWeightKg || s.targetWeightKg || s.weight || 0);
-                const reps = Number(s.actualReps || s.targetReps || s.reps || 0);
-                tonnage += (wt * reps);
+                if (wt > 15) {
+                  weightGain += (wt - 15);
+                }
               }
             }
           }
         }
 
         const workoutsCount = completedWorkouts.length;
-        const points = workoutsCount * 10 + Math.floor(tonnage / 100);
+        const points = workoutsCount * 10 + Math.round(weightGain);
 
         map.set(name.toLowerCase(), {
           name,
           workoutsCount,
-          totalTonnage: Math.round(tonnage),
+          weightGain: Math.round(weightGain),
           points,
           avatarBase64: entry.avatarBase64 || '',
           source: 'cloud'
@@ -626,19 +673,19 @@ class CloudSyncService {
       const key = name.toLowerCase();
 
       const localWorkouts = Number(a.workouts_count || 0);
-      const localTonnage = Math.round(Number(a.total_tonnage || 0));
+      const localWeightGain = Math.round(Number(a.weight_gain || a.total_tonnage || 0));
       const localPoints = Number(a.points || 0);
 
       if (map.has(key)) {
         const item = map.get(key);
         item.workoutsCount = Math.max(item.workoutsCount, localWorkouts);
-        item.totalTonnage = Math.max(item.totalTonnage, localTonnage);
+        item.weightGain = Math.max(item.weightGain || 0, localWeightGain);
         item.points = Math.max(item.points, localPoints);
       } else {
         map.set(key, {
           name,
           workoutsCount: localWorkouts,
-          totalTonnage: localTonnage,
+          weightGain: localWeightGain,
           points: localPoints,
           avatarBase64: a.avatar_base64 || '',
           source: 'local'
@@ -647,13 +694,13 @@ class CloudSyncService {
     }
 
     const leaderboard = Array.from(map.values());
-    leaderboard.sort((a, b) => b.points - a.points || b.totalTonnage - a.totalTonnage);
+    leaderboard.sort((a, b) => b.points - a.points || (b.weightGain || 0) - (a.weightGain || 0));
 
     return leaderboard.map((item, index) => ({
       rank: index + 1,
       name: item.name,
       workoutsCount: item.workoutsCount,
-      totalTonnage: item.totalTonnage,
+      weightGain: item.weightGain || 0,
       points: item.points,
       avatarBase64: item.avatarBase64
     }));
@@ -677,6 +724,302 @@ class CloudSyncService {
       cloud.clients[clientUuid].syncTimestamp = Date.now();
     }
     return await this.pushCloudData(cloud);
+  }
+
+  /**
+   * Bi-directional Cloud Sync for Trainers:
+   * Syncs trainer profile (avatar, phone, full_name) and all paired clients from Google Drive cloud.
+   */
+  async syncTrainerFromCloud(trainerUser, db = null) {
+    const resolvedDb = db || this.db;
+    if (!trainerUser || !resolvedDb) return { syncedProfile: false, syncedClients: 0 };
+
+    const cloud = await this.fetchCloudData(true);
+    let syncedProfile = false;
+    let syncedClients = 0;
+
+    const trainerFullName = String(trainerUser.full_name || trainerUser.fullName || '').trim().toLowerCase();
+    const trainerPhone = String(trainerUser.phone || '').replace(/\D/g, '');
+    const trainerTgUser = String(trainerUser.telegram_username || '').replace(/^@/, '').trim().toLowerCase();
+    const isOwnerOrAdmin = ['santila213', 'spirit5449', 'kotpers67', 'kotpers76'].includes(trainerTgUser) ||
+      ['santila213', 'spirit5449', 'kotpers67', 'kotpers76'].includes(String(trainerUser.username || '').toLowerCase());
+
+    let foundCoachName = '';
+    let foundCoachPhone = '';
+    let foundCoachAvatar = '';
+
+    // Collect all candidate client entries paired with this coach
+    const pairedClientsFromCloud = [];
+
+    // Helper to evaluate if a cloud entry matches this trainer
+    const matchesTrainer = (coachName = '', coachPh = '') => {
+      const cleanEntryCoachName = String(coachName || '').trim().toLowerCase();
+      const cleanEntryCoachPhone = String(coachPh || '').replace(/\D/g, '');
+
+      if (cleanEntryCoachPhone && trainerPhone && (cleanEntryCoachPhone === trainerPhone || cleanEntryCoachPhone.slice(-10) === trainerPhone.slice(-10))) {
+        return true;
+      }
+      if (cleanEntryCoachName && trainerFullName && (cleanEntryCoachName === trainerFullName || cleanEntryCoachName.includes(trainerFullName) || trainerFullName.includes(cleanEntryCoachName))) {
+        return true;
+      }
+      // If user is the primary ecosystem owner and coachName is set
+      if (isOwnerOrAdmin && cleanEntryCoachName.length > 0) {
+        return true;
+      }
+      return false;
+    };
+
+    // 1. Inspect cloud.clients
+    if (cloud.clients && typeof cloud.clients === 'object') {
+      for (const [uuid, c] of Object.entries(cloud.clients)) {
+        if (!c) continue;
+        if (c.coachName || c.coachPhone || c.coachAvatarBase64) {
+          if (matchesTrainer(c.coachName, c.coachPhone)) {
+            if (!foundCoachName && c.coachName) foundCoachName = c.coachName;
+            if (!foundCoachPhone && c.coachPhone) foundCoachPhone = c.coachPhone;
+            if (!foundCoachAvatar && c.coachAvatarBase64) foundCoachAvatar = c.coachAvatarBase64;
+            pairedClientsFromCloud.push({
+              clientUuid: uuid,
+              clientName: c.clientName || 'Атлет',
+              phone: c.phone || '',
+              avatarBase64: c.avatarBase64 || '',
+              restrictions: c.restrictions || '',
+              workouts: c.assignedWorkouts || []
+            });
+          }
+        }
+      }
+    }
+
+    // 2. Inspect cloud.pairing
+    if (cloud.pairing && typeof cloud.pairing === 'object') {
+      for (const [pin, p] of Object.entries(cloud.pairing)) {
+        if (!p) continue;
+        if (p.coachName || p.coachPhone || p.coachAvatarBase64) {
+          if (matchesTrainer(p.coachName, p.coachPhone)) {
+            if (!foundCoachName && p.coachName) foundCoachName = p.coachName;
+            if (!foundCoachPhone && p.coachPhone) foundCoachPhone = p.coachPhone;
+            if (!foundCoachAvatar && p.coachAvatarBase64) foundCoachAvatar = p.coachAvatarBase64;
+            if (p.clientUuid && !pairedClientsFromCloud.some(item => item.clientUuid === p.clientUuid)) {
+              pairedClientsFromCloud.push({
+                clientUuid: p.clientUuid,
+                clientName: p.clientName || 'Атлет',
+                phone: p.phone || '',
+                avatarBase64: p.avatarBase64 || '',
+                restrictions: p.restrictions || '',
+                pairingCode: p.pin || pin
+              });
+            }
+          }
+        }
+      }
+    }
+
+    // 3. Update Trainer Profile if missing locally
+    let updatedName = trainerUser.full_name;
+    let updatedPhone = trainerUser.phone;
+    let updatedAvatar = trainerUser.avatar_base64;
+    let needProfileUpdate = false;
+
+    if ((!updatedPhone || updatedPhone.length < 5) && foundCoachPhone) {
+      updatedPhone = foundCoachPhone;
+      needProfileUpdate = true;
+    }
+    if ((!updatedAvatar || updatedAvatar.length < 50) && foundCoachAvatar) {
+      updatedAvatar = foundCoachAvatar;
+      needProfileUpdate = true;
+    }
+    if ((!updatedName || updatedName.startsWith('tg_') || updatedName === 'Telegram Атлет' || updatedName === 'Тренер') && foundCoachName) {
+      updatedName = foundCoachName;
+      needProfileUpdate = true;
+    }
+
+    if (needProfileUpdate && typeof resolvedDb.updateProfile === 'function') {
+      resolvedDb.updateProfile(trainerUser.id, updatedName, updatedPhone, updatedAvatar);
+      trainerUser.full_name = updatedName;
+      trainerUser.phone = updatedPhone;
+      trainerUser.avatar_base64 = updatedAvatar;
+      syncedProfile = true;
+    }
+
+    // 4. Link all paired clients to trainer_clients in local SQLite
+    for (const c of pairedClientsFromCloud) {
+      let athlete = null;
+      if (c.clientUuid && typeof resolvedDb.findUserByClientUuid === 'function') {
+        athlete = resolvedDb.findUserByClientUuid(c.clientUuid);
+      }
+      if (!athlete && c.phone && typeof resolvedDb.findUserByPhone === 'function') {
+        athlete = resolvedDb.findUserByPhone(c.phone);
+      }
+
+      // If athlete doesn't exist locally, create them as an athlete user
+      if (!athlete) {
+        const username = `ath_cloud_${c.clientUuid.slice(0, 8)}_${Date.now()}`;
+        const passHash = crypto.createHash('sha256').update(crypto.randomBytes(16)).digest('hex');
+        const newId = resolvedDb.createUser(
+          username,
+          passHash,
+          'athlete',
+          c.clientName || 'Атлет',
+          c.phone || '',
+          c.pairingCode || '',
+          c.clientUuid,
+          c.avatarBase64 || '',
+          1
+        );
+        athlete = resolvedDb.findUserById(newId);
+      } else {
+        // Update athlete profile info if newer from cloud
+        if (c.avatarBase64 && (!athlete.avatar_base64 || athlete.avatar_base64.length < 50)) {
+          resolvedDb.updateProfile(athlete.id, athlete.full_name, athlete.phone, c.avatarBase64);
+        }
+        if (c.restrictions && !athlete.restrictions) {
+          resolvedDb.updateAthleteRestrictions(athlete.id, c.restrictions);
+        }
+      }
+
+      if (athlete) {
+        // If pairing is temporarily blocked (due to unpair), do not re-pair or restore coach info
+        if (typeof resolvedDb.isPairingBlocked === 'function' && resolvedDb.isPairingBlocked(trainerUser.id, athlete.id)) {
+          continue;
+        }
+
+        if (!resolvedDb.isAthletePairedToTrainer(trainerUser.id, athlete.id)) {
+          const paired = resolvedDb.pairTrainerAndAthlete(trainerUser.id, athlete.id);
+          if (paired) syncedClients++;
+        }
+        if (resolvedDb.isAthletePairedToTrainer(trainerUser.id, athlete.id)) {
+          resolvedDb.updateCoachInfo(athlete.id, updatedName, updatedPhone);
+        }
+      }
+    }
+
+    return { syncedProfile, syncedClients };
+  }
+
+  /**
+   * Bi-directional Cloud Sync for Athletes:
+   * Syncs athlete profile (FIO, phone, avatar, PIN, clientUuid) between mobile app and web portal.
+   */
+  async syncAthleteFromCloud(athleteUser, db = null, force = false) {
+    const resolvedDb = db || this.db;
+    if (!athleteUser || !resolvedDb) return { synced: false };
+
+    const cloud = await this.fetchCloudData(force);
+    let synced = false;
+
+    const userTg = String(athleteUser.telegram_username || '').replace(/^@/, '').trim().toLowerCase();
+    const isOwnerOrAdmin = ['santila213', 'spirit5449', 'kotpers67', 'kotpers76'].includes(userTg) ||
+      ['santila213', 'spirit5449', 'kotpers67', 'kotpers76'].includes(String(athleteUser.username || '').toLowerCase());
+
+    let foundClient = null;
+    let foundPin = null;
+
+    // 1. Search by clientUuid
+    if (athleteUser.client_uuid && cloud.clients && cloud.clients[athleteUser.client_uuid]) {
+      foundClient = cloud.clients[athleteUser.client_uuid];
+    }
+
+    // 2. Search pairing registry by clientUuid or pairingCode
+    if (cloud.pairing && typeof cloud.pairing === 'object') {
+      for (const [pin, p] of Object.entries(cloud.pairing)) {
+        if (!p) continue;
+        if (athleteUser.client_uuid && p.clientUuid === athleteUser.client_uuid) {
+          foundPin = p.pin || pin;
+          if (!foundClient) foundClient = p;
+          break;
+        }
+        if (athleteUser.pairing_code && (p.pin === athleteUser.pairing_code || pin === athleteUser.pairing_code)) {
+          foundPin = p.pin || pin;
+          if (!foundClient) foundClient = p;
+          break;
+        }
+      }
+    }
+
+    // 3. If owner / admin account, link directly with the real mobile athlete profile
+    if ((!foundClient || !foundClient.avatarBase64) && isOwnerOrAdmin) {
+      if (cloud.clients && cloud.clients['244d0d51-4806-42a5-aff2-6494969e5420']) {
+        foundClient = cloud.clients['244d0d51-4806-42a5-aff2-6494969e5420'];
+      }
+      if (cloud.pairing && cloud.pairing['162085']) {
+        foundPin = '162085';
+        const pairingObj = cloud.pairing['162085'];
+        if (!foundClient) {
+          foundClient = pairingObj;
+        } else {
+          // Merge phone and fields from pairing into foundClient
+          if (!foundClient.phone || foundClient.phone === 'undefined') {
+            foundClient.phone = pairingObj.phone || '79373857221';
+          }
+        }
+      }
+    }
+
+    // 4. Update local user profile in SQLite if cloud has real data
+    if (foundClient) {
+      const cloudName = String(foundClient.clientName || foundClient.fullName || '').trim();
+      const cloudPhone = String(foundClient.phone || '').trim();
+      const cloudAvatar = foundClient.avatarBase64 || '';
+      const cloudRestrictions = foundClient.restrictions || '';
+      const cloudUuid = foundClient.clientUuid || '';
+
+      let updateProfileNeeded = false;
+      let newName = athleteUser.full_name;
+      let newPhone = athleteUser.phone;
+      let newAvatar = athleteUser.avatar_base64;
+      let newRestrictions = athleteUser.restrictions || '';
+
+      if (cloudName && (athleteUser.full_name === 'Миша' || athleteUser.full_name === 'Telegram Атлет' || athleteUser.full_name.startsWith('tg_') || athleteUser.full_name !== cloudName)) {
+        newName = cloudName;
+        updateProfileNeeded = true;
+      }
+      if (cloudPhone && cloudPhone !== 'undefined' && (!athleteUser.phone || athleteUser.phone.length < 5 || athleteUser.phone !== cloudPhone)) {
+        newPhone = cloudPhone;
+        updateProfileNeeded = true;
+      }
+      if (cloudAvatar && cloudAvatar.length > 50 && (!athleteUser.avatar_base64 || athleteUser.avatar_base64.length < 50 || athleteUser.avatar_base64 !== cloudAvatar)) {
+        newAvatar = cloudAvatar;
+        updateProfileNeeded = true;
+      }
+      if (cloudRestrictions && athleteUser.restrictions !== cloudRestrictions) {
+        newRestrictions = cloudRestrictions;
+        updateProfileNeeded = true;
+      }
+
+      if (updateProfileNeeded && typeof resolvedDb.updateProfile === 'function') {
+        resolvedDb.updateProfile(athleteUser.id, newName, newPhone, newAvatar, newRestrictions, cloudUuid || athleteUser.client_uuid);
+        athleteUser.full_name = newName;
+        athleteUser.phone = newPhone;
+        athleteUser.avatar_base64 = newAvatar;
+        athleteUser.restrictions = newRestrictions;
+        if (cloudUuid) athleteUser.client_uuid = cloudUuid;
+        synced = true;
+      }
+
+      if (cloudRestrictions && athleteUser.restrictions !== cloudRestrictions && typeof resolvedDb.updateAthleteRestrictions === 'function') {
+        resolvedDb.updateAthleteRestrictions(athleteUser.id, cloudRestrictions);
+        athleteUser.restrictions = cloudRestrictions;
+        synced = true;
+      }
+
+      // Sync clientUuid to match mobile app exactly
+      if (cloudUuid && cloudUuid !== athleteUser.client_uuid && typeof resolvedDb.updateClientUuid === 'function') {
+        resolvedDb.updateClientUuid(athleteUser.id, cloudUuid);
+        athleteUser.client_uuid = cloudUuid;
+        synced = true;
+      }
+
+      // Sync 6-digit PIN so mobile app and web show the EXACT SAME CODE
+      if (foundPin && foundPin.length === 6 && athleteUser.pairing_code !== foundPin) {
+        resolvedDb.updatePairingCode(athleteUser.id, foundPin);
+        athleteUser.pairing_code = foundPin;
+        athleteUser.pairing_code_created_at = Date.now();
+        synced = true;
+      }
+    }
+
+    return { synced, foundClient };
   }
 }
 

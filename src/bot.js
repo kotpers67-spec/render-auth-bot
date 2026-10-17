@@ -14,22 +14,32 @@ const OWNER_LINKS = {
   spirit: 'https://t.me/Spirit5449'
 };
 
+const MINI_APP_URL = process.env.MINI_APP_URL || 'https://fitness-ecosystem-pro.onrender.com';
+
+function isTrainerApprovalRequired() {
+  if (process.env.REQUIRE_TRAINER_APPROVAL === 'true') return true;
+  if (process.env.REQUIRE_TRAINER_APPROVAL === 'false') return false;
+  return process.env.NODE_ENV !== 'test';
+}
+
 /**
  * Creates persistent menu reply keyboard with main buttons
  */
 function createMainMenuKeyboard() {
   return new Keyboard()
-    .text('🔑 Код входа').text('🔄 Сменить роль').row()
-    .text('🔗 Привязать аккаунт').text('💬 Связь с владельцами').row()
-    .text('❓ Справка')
+    .webApp('🚀 Открыть Fitness Pro', MINI_APP_URL).row()
+    .text('🔑 Код входа').text('🔗 Привязать аккаунт').row()
+    .text('💬 Связь с владельцами').text('❓ Справка')
     .resized();
 }
 
 /**
- * Creates inline keyboard with links to project owners
+ * Creates inline keyboard with links to project owners and Mini App
  */
 function createOwnersKeyboard() {
   return new InlineKeyboard()
+    .webApp('🚀 Открыть приложение (Mini App)', MINI_APP_URL)
+    .row()
     .url('💬 @SantiLA213 (Основатель)', OWNER_LINKS.santi)
     .row()
     .url('💬 @Spirit5449 (Разработчик)', OWNER_LINKS.spirit);
@@ -192,9 +202,10 @@ function getUnifiedUserCode(tgId, username, db, telegramOtpStore, cloudSyncServi
 
   // Sync to telegramOtpStore across all aliases
   if (telegramOtpStore) {
-    if (username) telegramOtpStore.set(username, { code, expiresAt, attempts: 0 });
-    if (tgId) telegramOtpStore.set(`id_${tgId}`, { code, expiresAt, attempts: 0 });
-    if (user && user.username) telegramOtpStore.set(user.username, { code, expiresAt, attempts: 0 });
+    const entryData = { code, expiresAt, tgId, username, attempts: 0 };
+    if (username) telegramOtpStore.set(username, entryData);
+    if (tgId) telegramOtpStore.set(`id_${tgId}`, entryData);
+    if (user && user.username) telegramOtpStore.set(user.username, entryData);
   }
 
   return { code, expiresAt, user };
@@ -242,32 +253,134 @@ function setupBotHandlers(bot, { db, telegramOtpStore, telegramSessionStore, use
       if (!user && username) user = db.findUserByUsername(username);
       if (!user && username) user = db.findUserByUsername(`tg_${username}`);
 
+      const requestedRole = session.requestedRole || 'athlete';
+      const isOwnerOrAdmin = ['santila213', 'spirit5449', 'kotpers67', 'kotpers76'].includes((username || '').toLowerCase()) ||
+        ['santila213', 'spirit5449'].includes((ctx.from?.username || '').toLowerCase());
+
       if (!user) {
         const usernameKey = username ? `tg_${username}` : `tg_${tgId}`;
         const passwordHash = hashPassword(crypto.randomBytes(24).toString('hex'));
-        const pairingCode = db.generateUniquePairingCode();
+        const pairingCode = requestedRole === 'athlete' ? db.generateUniquePairingCode() : '';
         const clientUuid = crypto.randomUUID();
+        const requireTrainerApproval = isTrainerApprovalRequired();
+        const isApproved = (requestedRole === 'trainer' && requireTrainerApproval && !isOwnerOrAdmin) ? 0 : 1;
 
         const userId = db.createUser(
           usernameKey,
           passwordHash,
-          'athlete',
+          requestedRole,
           escapeHtml(fullName),
           '',
           pairingCode,
           clientUuid,
-          ''
+          '',
+          isApproved
         );
         db.linkTelegram(userId, tgId, username || '');
-        if (cloudSyncService && typeof cloudSyncService.registerAthletePairing === 'function') {
+        if (requestedRole === 'athlete' && cloudSyncService && typeof cloudSyncService.registerAthletePairing === 'function') {
           cloudSyncService.registerAthletePairing(pairingCode, clientUuid, escapeHtml(fullName), '', '').catch(() => {});
         }
         user = db.findUserById(userId);
+
+        // If trainer needs approval, notify admin
+        if (requestedRole === 'trainer' && user.is_approved === 0) {
+          const adminChatIds = new Set();
+          if (process.env.ADMIN_CHAT_ID) adminChatIds.add(String(process.env.ADMIN_CHAT_ID).trim());
+          ['santila213', 'spirit5449'].forEach(adminHandle => {
+            const cId = userTgChatMap?.get(adminHandle) || userTgChatMap?.get(adminHandle.toLowerCase());
+            if (cId) adminChatIds.add(String(cId));
+          });
+
+          for (const adminChatId of adminChatIds) {
+            try {
+              await bot.api.sendMessage(
+                adminChatId,
+                `🔔 <b>НОВАЯ ЗАЯВКА НА АККАУНТ ТРЕНЕРА ЧЕРЕЗ TELEGRAM!</b>\n\n` +
+                `👤 <b>Имя:</b> ${escapeHtml(fullName)}\n` +
+                `🏷 <b>Логин:</b> ${user.username}\n` +
+                `✈ <b>Telegram:</b> @${username || tgId}\n\n` +
+                `Нажмите кнопку ниже или отправьте:\n<code>/approve_${userId}</code>`,
+                {
+                  parse_mode: 'HTML',
+                  reply_markup: {
+                    inline_keyboard: [
+                      [{ text: `✅ Одобрить тренера #${userId}`, callback_data: `approve_${userId}` }]
+                    ]
+                  }
+                }
+              );
+            } catch (_) {}
+          }
+        }
       } else {
         if (!user.telegram_id && tgId) {
           db.linkTelegram(user.id, tgId, username || '');
-          user = db.findUserById(user.id);
         }
+
+        // Handle role switch for existing users based on selected requestedRole
+        if (requestedRole && requestedRole !== user.role) {
+          db.updateUserRole(user.id, requestedRole);
+          user.role = requestedRole;
+
+          if (requestedRole === 'trainer') {
+            const requireTrainerApproval = isTrainerApprovalRequired();
+            if (isOwnerOrAdmin || !requireTrainerApproval) {
+              db.approveTrainer(user.id);
+              user.is_approved = 1;
+            } else {
+              user.is_approved = 0;
+
+              // Notify admins about existing user requesting trainer role
+              const adminChatIds = new Set();
+              if (process.env.ADMIN_CHAT_ID) adminChatIds.add(String(process.env.ADMIN_CHAT_ID).trim());
+              ['santila213', 'spirit5449'].forEach(adminHandle => {
+                const cId = userTgChatMap?.get(adminHandle) || userTgChatMap?.get(adminHandle.toLowerCase());
+                if (cId) adminChatIds.add(String(cId));
+              });
+
+              for (const adminChatId of adminChatIds) {
+                try {
+                  await bot.api.sendMessage(
+                    adminChatId,
+                    `🔔 <b>ЗАПРОС НА ПЕРЕКЛЮЧЕНИЕ НА РОЛЬ ТРЕНЕРА!</b>\n\n` +
+                    `👤 <b>Имя:</b> ${escapeHtml(user.full_name || fullName)}\n` +
+                    `🏷 <b>Логин:</b> ${user.username}\n` +
+                    `✈ <b>Telegram:</b> @${username || tgId}\n\n` +
+                    `Нажмите кнопку ниже или отправьте:\n<code>/approve_${user.id}</code>`,
+                    {
+                      parse_mode: 'HTML',
+                      reply_markup: {
+                        inline_keyboard: [
+                          [{ text: `✅ Одобрить тренера #${user.id}`, callback_data: `approve_${user.id}` }]
+                        ]
+                      }
+                    }
+                  );
+                } catch (_) {}
+              }
+            }
+          } else if (requestedRole === 'athlete') {
+            // Switched back to athlete: ensure user is active athlete
+            user.is_approved = 1;
+          }
+        }
+
+        user = db.findUserById(user.id);
+      }
+
+      // Check if user is a pending trainer
+      if (user.role === 'trainer' && user.is_approved === 0 && !isOwnerOrAdmin) {
+        session.status = 'PENDING_APPROVAL';
+        session.username = user.username;
+        session.userId = user.id;
+
+        await ctx.reply(
+          `⏳ <b>ЗАЯВКА НА АККАУНТ ТРЕНЕРА НА РАССМОТРЕНИИ</b>\n\n` +
+          `Ваша заявка принята!\n` +
+          `В течение 72 часов администраторы свяжутся с вами или одобрят аккаунт.`,
+          { parse_mode: 'HTML', reply_markup: createOwnersKeyboard() }
+        );
+        return;
       }
 
       // Security check: 2FA Enforcement
@@ -307,8 +420,25 @@ function setupBotHandlers(bot, { db, telegramOtpStore, telegramSessionStore, use
         return;
       }
 
-      const token = generateToken();
+      const token = generateToken(user.id, user.role);
       db.createAuthToken(token, user.id);
+
+      // If user is a trainer, sync trainer profile and clients from cloud immediately
+      if (user.role === 'trainer' && cloudSyncService && typeof cloudSyncService.syncTrainerFromCloud === 'function') {
+        try {
+          await cloudSyncService.syncTrainerFromCloud(user, db);
+          user = db.findUserById(user.id) || user;
+        } catch (err) {
+          console.warn('[Bot] Trainer cloud sync notice on login:', err.message);
+        }
+      } else if (user.role === 'athlete' && cloudSyncService && typeof cloudSyncService.syncAthleteFromCloud === 'function') {
+        try {
+          await cloudSyncService.syncAthleteFromCloud(user, db);
+          user = db.findUserById(user.id) || user;
+        } catch (err) {
+          console.warn('[Bot] Athlete cloud sync notice on login:', err.message);
+        }
+      }
 
       session.status = 'AUTHORIZED';
       session.token = token;
@@ -323,12 +453,18 @@ function setupBotHandlers(bot, { db, telegramOtpStore, telegramSessionStore, use
         clientUuid: user.client_uuid || '',
         coachName: user.coach_name || '',
         coachPhone: user.coach_phone || '',
-        isPrivate: Boolean(user.is_private)
+        isPrivate: Boolean(user.is_private),
+        telegram_id: String(user.telegram_id || tgId || ''),
+        telegramId: String(user.telegram_id || tgId || ''),
+        telegram_username: String(user.telegram_username || username || ''),
+        telegramUsername: String(user.telegram_username || username || '')
       };
 
       const roleTitle = user.role === 'trainer' ? 'Тренер' : 'Атлет';
       const webAppKeyboard = new InlineKeyboard()
-        .url('🌐 Открыть Fitness Ecosystem', 'https://fitness-ecosystem-pro.onrender.com')
+        .webApp('🚀 Запустить Mini App', MINI_APP_URL)
+        .row()
+        .url('🌐 Открыть в браузере', MINI_APP_URL)
         .row()
         .url('💬 Поддержка создателей', OWNER_LINKS.santi);
 
@@ -474,6 +610,7 @@ function setupBotHandlers(bot, { db, telegramOtpStore, telegramSessionStore, use
   bot.hears(['❓ Справка', '/help'], async (ctx) => {
     await ctx.reply(
       `📖 <b>Справка Fitness Ecosystem Pro:</b>\n\n` +
+      `• <b>🚀 Открыть Fitness Pro</b> — Запуск Telegram Mini App внутри мессенджера\n` +
       `• <b>🔑 Код входа</b> — Получить свежий 6-значный одноразовый код\n` +
       `• <b>🔗 Привязать аккаунт</b> — Инструкция по привязке Telegram\n` +
       `• <b>💬 Связь с владельцами</b> — Контакты основателей проекта\n\n` +
@@ -482,6 +619,24 @@ function setupBotHandlers(bot, { db, telegramOtpStore, telegramSessionStore, use
       {
         parse_mode: 'HTML',
         reply_markup: createMainMenuKeyboard()
+      }
+    );
+  });
+
+  // /app handler to launch Mini App
+  bot.command('app', async (ctx) => {
+    const inlineAppKeyboard = new InlineKeyboard()
+      .webApp('🚀 Запустить Fitness Pro Mini App', MINI_APP_URL)
+      .row()
+      .url('🌐 Открыть в браузере', MINI_APP_URL);
+
+    await ctx.reply(
+      `🏋️ <b>Fitness Ecosystem Pro Mini App</b>\n\n` +
+      `Тренировки, подопечные, аналитика и таймер отдыха прямо внутри Telegram!\n` +
+      `Нажмите кнопку ниже для запуска:`,
+      {
+        parse_mode: 'HTML',
+        reply_markup: inlineAppKeyboard
       }
     );
   });
@@ -623,12 +778,24 @@ function initTelegramBot({ token, db, telegramOtpStore, telegramSessionStore, us
     // Set menu commands
     bot.api.setMyCommands([
       { command: 'start', description: 'Запуск бота / привязка аккаунта' },
+      { command: 'app', description: '🚀 Открыть Fitness Pro (Mini App)' },
       { command: 'code', description: 'Получить 6-значный 2FA код' },
       { command: 'link', description: 'Привязать аккаунт: /link <токен>' },
       { command: 'contacts', description: 'Связь с создателями (@SantiLA213, @Spirit5449)' },
       { command: 'help', description: 'Справка и безопасность' }
     ]).catch(err => {
       console.warn('[Telegram Bot] Предупреждение setMyCommands:', err.message);
+    });
+
+    // Configure Menu Button in chat to launch Mini App with 1 click
+    bot.api.setChatMenuButton({
+      menu_button: {
+        type: 'web_app',
+        text: 'Открыть Fitness Pro',
+        web_app: { url: MINI_APP_URL }
+      }
+    }).catch(err => {
+      console.warn('[Telegram Bot] Предупреждение setChatMenuButton:', err.message);
     });
 
     bot.start({

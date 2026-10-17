@@ -5,7 +5,7 @@
 
 const { DatabaseSync } = require('node:sqlite');
 const path = require('node:path');
-const { generateSecurePin } = require('./security');
+const { generateSecurePin, verifySignedToken } = require('./security');
 
 class AppDatabase {
   constructor(dbPath = path.join(__dirname, '..', 'fitness.sqlite')) {
@@ -85,6 +85,11 @@ class AppDatabase {
         FOREIGN KEY(user_id) REFERENCES users(id)
       );
 
+      CREATE TABLE IF NOT EXISTS revoked_tokens (
+        token TEXT PRIMARY KEY,
+        revoked_at INTEGER NOT NULL
+      );
+
       CREATE TABLE IF NOT EXISTS telegram_link_tokens (
         token TEXT PRIMARY KEY,
         user_id INTEGER NOT NULL,
@@ -105,8 +110,19 @@ class AppDatabase {
         FOREIGN KEY(user_id) REFERENCES users(id)
       );
 
+      CREATE TABLE IF NOT EXISTS exercises (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL UNIQUE,
+        muscle_group TEXT DEFAULT 'Грудь',
+        default_rest_seconds INTEGER DEFAULT 90,
+        is_custom INTEGER DEFAULT 1,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      );
+
       CREATE INDEX IF NOT EXISTS idx_users_pairing_code ON users(pairing_code);
       CREATE INDEX IF NOT EXISTS idx_workout_sets_session ON workout_sets(session_id);
+      CREATE INDEX IF NOT EXISTS idx_revoked_tokens ON revoked_tokens(token);
+      CREATE INDEX IF NOT EXISTS idx_exercises_name ON exercises(name);
     `);
 
     // Ensure backwards-compatible columns exist in existing tables
@@ -124,6 +140,19 @@ class AppDatabase {
     safeAddColumn('users', "two_factor_enabled INTEGER DEFAULT 0");
     safeAddColumn('users', "is_approved INTEGER DEFAULT 1");
     safeAddColumn('users', "restrictions TEXT DEFAULT ''");
+
+    // Table to prevent immediate auto re-pairing (blocks re-pairing for 1 day)
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS unpair_blocks (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        trainer_id INTEGER NOT NULL,
+        athlete_id INTEGER NOT NULL,
+        blocked_until INTEGER NOT NULL,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(trainer_id, athlete_id)
+      );
+      CREATE INDEX IF NOT EXISTS idx_unpair_blocks_lookup ON unpair_blocks(trainer_id, athlete_id);
+    `);
 
     safeAddColumn('workout_sessions', "is_self_workout_allowed INTEGER DEFAULT 0");
     safeAddColumn('workout_sessions', "assigned_by_trainer_id INTEGER DEFAULT NULL");
@@ -238,7 +267,7 @@ class AppDatabase {
     const cleanCode = String(code || '').trim();
     if (!cleanCode) return null;
     const stmt = this.db.prepare(`
-      SELECT id, username, role, full_name, phone, avatar_base64, client_uuid, coach_name, coach_phone, pairing_code, pairing_code_created_at, is_private
+      SELECT id, username, password_hash, role, full_name, phone, avatar_base64, client_uuid, coach_name, coach_phone, pairing_code, pairing_code_created_at, is_private, telegram_id, telegram_username, two_factor_enabled, created_at, is_approved, restrictions
       FROM users WHERE pairing_code = ? AND role = 'athlete'
     `);
     return stmt.get(cleanCode) || null;
@@ -257,18 +286,19 @@ class AppDatabase {
     return generateSecurePin();
   }
 
-  updateProfile(userId, fullName, phone, avatarBase64 = null) {
-    if (avatarBase64 !== null && avatarBase64 !== undefined) {
-      const stmt = this.db.prepare(`
-        UPDATE users SET full_name = ?, phone = ?, avatar_base64 = ? WHERE id = ?
-      `);
-      return stmt.run(fullName, phone, avatarBase64, userId);
-    } else {
-      const stmt = this.db.prepare(`
-        UPDATE users SET full_name = ?, phone = ? WHERE id = ?
-      `);
-      return stmt.run(fullName, phone, userId);
-    }
+  updateProfile(userId, fullName, phone, avatarBase64 = null, restrictions = null, clientUuid = null) {
+    const existing = this.findUserById(userId);
+    if (!existing) return null;
+    const finalAvatar = (avatarBase64 !== null && avatarBase64 !== undefined) ? avatarBase64 : existing.avatar_base64;
+    const finalRestrictions = (restrictions !== null && restrictions !== undefined) ? restrictions : (existing.restrictions || '');
+    const finalClientUuid = (clientUuid && String(clientUuid).trim()) ? String(clientUuid).trim() : existing.client_uuid;
+
+    const stmt = this.db.prepare(`
+      UPDATE users 
+      SET full_name = ?, phone = ?, avatar_base64 = ?, restrictions = ?, client_uuid = ? 
+      WHERE id = ?
+    `);
+    return stmt.run(fullName, phone, finalAvatar, finalRestrictions, finalClientUuid, userId);
   }
 
   updateCoachInfo(athleteId, coachName, coachPhone) {
@@ -276,6 +306,12 @@ class AppDatabase {
       UPDATE users SET coach_name = ?, coach_phone = ? WHERE id = ?
     `);
     return stmt.run(coachName, coachPhone, athleteId);
+  }
+
+  updateClientUuid(athleteId, clientUuid) {
+    const cleanUuid = String(clientUuid || '').trim();
+    const stmt = this.db.prepare(`UPDATE users SET client_uuid = ? WHERE id = ?`);
+    return stmt.run(cleanUuid, athleteId);
   }
 
   updateAthletePrivacy(athleteId, isPrivate) {
@@ -416,12 +452,24 @@ class AppDatabase {
 
   // --- Pairing Operations ---
 
-  pairTrainerAndAthlete(trainerId, athleteId) {
+  pairTrainerAndAthlete(trainerId, athleteId, force = false) {
+    const tId = Number(trainerId);
+    const aId = Number(athleteId);
+    if (!tId || !aId) return false;
+
+    // Check if pairing is temporarily blocked (1-day cooldown after unpairing)
+    if (!force && this.isPairingBlocked(tId, aId)) {
+      return false;
+    }
+
+    // Remove any past block if explicitly pairing now with PIN
+    this.removePairingBlock(tId, aId);
+
     const stmt = this.db.prepare(`
       INSERT OR IGNORE INTO trainer_clients (trainer_id, athlete_id)
       VALUES (?, ?)
     `);
-    stmt.run(trainerId, athleteId);
+    stmt.run(tId, aId);
     return true;
   }
 
@@ -436,29 +484,87 @@ class AppDatabase {
     return Boolean(row);
   }
 
+  isPairingBlocked(trainerId, athleteId) {
+    const tId = Number(trainerId);
+    const aId = Number(athleteId);
+    if (!tId || !aId) return false;
+    const now = Date.now();
+    const row = this.db.prepare(`
+      SELECT blocked_until FROM unpair_blocks 
+      WHERE trainer_id = ? AND athlete_id = ?
+    `).get(tId, aId);
+    if (!row) return false;
+    if (Number(row.blocked_until) > now) {
+      return true;
+    }
+    // Block expired: clean it up
+    this.removePairingBlock(tId, aId);
+    return false;
+  }
+
+  blockPairing(trainerId, athleteId, durationMs = 24 * 60 * 60 * 1000) {
+    const tId = Number(trainerId);
+    const aId = Number(athleteId);
+    if (!tId || !aId) return false;
+    const blockedUntil = Date.now() + durationMs;
+    const stmt = this.db.prepare(`
+      INSERT INTO unpair_blocks (trainer_id, athlete_id, blocked_until)
+      VALUES (?, ?, ?)
+      ON CONFLICT(trainer_id, athlete_id) DO UPDATE SET blocked_until = excluded.blocked_until
+    `);
+    stmt.run(tId, aId, blockedUntil);
+    return true;
+  }
+
+  removePairingBlock(trainerId, athleteId) {
+    const tId = Number(trainerId);
+    const aId = Number(athleteId);
+    if (!tId || !aId) return false;
+    this.db.prepare(`
+      DELETE FROM unpair_blocks WHERE trainer_id = ? AND athlete_id = ?
+    `).run(tId, aId);
+    return true;
+  }
+
   unpairTrainerAndAthlete(trainerId, athleteId) {
+    const tId = Number(trainerId);
+    const aId = Number(athleteId);
+    if (!tId || !aId) return false;
+
     const stmt = this.db.prepare(`
       DELETE FROM trainer_clients WHERE trainer_id = ? AND athlete_id = ?
     `);
-    stmt.run(trainerId, athleteId);
+    stmt.run(tId, aId);
 
     const coachClearStmt = this.db.prepare(`
       UPDATE users SET coach_name = '', coach_phone = '' WHERE id = ?
     `);
-    coachClearStmt.run(athleteId);
+    coachClearStmt.run(aId);
+
+    // Block automatic re-pairing between this trainer and athlete for 24 hours (1 day)
+    this.blockPairing(tId, aId, 24 * 60 * 60 * 1000);
     return true;
   }
 
   unpairAthleteBySelf(athleteId) {
+    const aId = Number(athleteId);
+    if (!aId) return false;
+
+    // Find all trainers previously paired with this athlete and block re-pairing for 1 day
+    const rows = this.db.prepare(`SELECT trainer_id FROM trainer_clients WHERE athlete_id = ?`).all(aId);
+    for (const r of rows) {
+      this.blockPairing(r.trainer_id, aId, 24 * 60 * 60 * 1000);
+    }
+
     const stmt = this.db.prepare(`
       DELETE FROM trainer_clients WHERE athlete_id = ?
     `);
-    stmt.run(athleteId);
+    stmt.run(aId);
 
     const coachClearStmt = this.db.prepare(`
       UPDATE users SET coach_name = '', coach_phone = '' WHERE id = ?
     `);
-    coachClearStmt.run(athleteId);
+    coachClearStmt.run(aId);
     return true;
   }
 
@@ -642,6 +748,16 @@ class AppDatabase {
     return this.getWorkoutSetById(setId);
   }
 
+  updateWorkoutSet(setId, weightKg, reps, rpe = 8.0) {
+    const stmt = this.db.prepare(`
+      UPDATE workout_sets 
+      SET weight_kg = ?, reps = ?, rpe = ?, actual_weight_kg = ?, actual_reps = ?
+      WHERE id = ?
+    `);
+    stmt.run(weightKg, reps, rpe, weightKg, reps, setId);
+    return this.getWorkoutSetById(setId);
+  }
+
   deleteWorkoutSet(setId) {
     const stmt = this.db.prepare(`
       DELETE FROM workout_sets WHERE id = ?
@@ -659,16 +775,51 @@ class AppDatabase {
     return stmt.get(setId) || null;
   }
 
-  getLastExerciseStats(athleteId, exerciseName) {
-    const stmt = this.db.prepare(`
-      SELECT ws.date, s.weight_kg, s.reps, s.rpe
+  getLastExerciseStats(athleteId, exerciseName, beforeDate = null) {
+    const dateQuery = beforeDate
+      ? this.db.prepare(`
+          SELECT ws.date
+          FROM workout_sets s
+          JOIN workout_sessions ws ON s.session_id = ws.id
+          WHERE ws.athlete_id = ? AND s.exercise_name = ? AND ws.date < ?
+          ORDER BY ws.date DESC, s.id DESC
+          LIMIT 1
+        `).get(athleteId, exerciseName, beforeDate)
+      : this.db.prepare(`
+          SELECT ws.date
+          FROM workout_sets s
+          JOIN workout_sessions ws ON s.session_id = ws.id
+          WHERE ws.athlete_id = ? AND s.exercise_name = ?
+          ORDER BY ws.date DESC, s.id DESC
+          LIMIT 1
+        `).get(athleteId, exerciseName);
+
+    if (!dateQuery || !dateQuery.date) return null;
+    const lastDate = dateQuery.date;
+
+    const setsStmt = this.db.prepare(`
+      SELECT s.id, s.weight_kg, s.reps, s.rpe, s.is_completed
       FROM workout_sets s
       JOIN workout_sessions ws ON s.session_id = ws.id
-      WHERE ws.athlete_id = ? AND s.exercise_name = ?
-      ORDER BY s.id DESC
-      LIMIT 1
+      WHERE ws.athlete_id = ? AND s.exercise_name = ? AND ws.date = ?
+      ORDER BY s.id ASC
     `);
-    return stmt.get(athleteId, exerciseName) || null;
+    const sets = setsStmt.all(athleteId, exerciseName, lastDate);
+    const maxWeightKg = sets.reduce((max, s) => Math.max(max, Number(s.weight_kg) || 0), 0);
+    const totalReps = sets.reduce((sum, s) => sum + (Number(s.reps) || 0), 0);
+
+    return {
+      date: lastDate,
+      lastDate,
+      maxWeightKg,
+      setsCount: sets.length,
+      totalReps,
+      sets,
+      // Backward compatibility for single last set fields
+      weight_kg: sets.length > 0 ? sets[sets.length - 1].weight_kg : 0,
+      reps: sets.length > 0 ? sets[sets.length - 1].reps : 0,
+      rpe: sets.length > 0 ? sets[sets.length - 1].rpe : null
+    };
   }
 
   // --- Leaderboard / Competitions (Strict Zero-Mocks, Real Finished Workouts Only) ---
@@ -677,15 +828,15 @@ class AppDatabase {
     const stmt = this.db.prepare(`
       SELECT u.id, u.full_name, u.avatar_base64,
              COUNT(DISTINCT ws.id) as workouts_count,
-             COALESCE(SUM(s.weight_kg * s.reps), 0) as total_tonnage,
-             CAST(COUNT(DISTINCT ws.id) * 10 + FLOOR(COALESCE(SUM(s.weight_kg * s.reps), 0) / 100.0) AS INTEGER) as points
+             COALESCE(SUM(CASE WHEN s.weight_kg > 15 THEN s.weight_kg - 15 ELSE 0 END), 0) as weight_gain,
+             CAST(COUNT(DISTINCT ws.id) * 10 + COALESCE(SUM(CASE WHEN s.weight_kg > 15 THEN s.weight_kg - 15 ELSE 0 END), 0) AS INTEGER) as points
       FROM users u
       JOIN workout_sessions ws ON u.id = ws.athlete_id
       JOIN workout_sets s ON ws.id = s.session_id AND s.is_completed = 1
       WHERE u.role = 'athlete' AND u.is_private = 0
       GROUP BY u.id, u.full_name, u.avatar_base64
-      HAVING workouts_count > 0 AND total_tonnage > 0
-      ORDER BY points DESC, total_tonnage DESC
+      HAVING workouts_count > 0
+      ORDER BY points DESC, weight_gain DESC
     `);
     return stmt.all();
   }
@@ -702,26 +853,115 @@ class AppDatabase {
   }
 
   getUserByToken(token) {
+    if (!token || typeof token !== 'string') return null;
+    try {
+      const isRevoked = this.db.prepare('SELECT 1 FROM revoked_tokens WHERE token = ?').get(token);
+      if (isRevoked) return null;
+    } catch (_) {}
+
     const now = Date.now();
     const stmt = this.db.prepare(`
-      SELECT u.id, u.username, u.role, u.full_name, u.phone, u.avatar_base64, u.client_uuid, u.coach_name, u.coach_phone, u.pairing_code, u.pairing_code_created_at, u.is_private, u.telegram_id, u.telegram_username, u.two_factor_enabled
+      SELECT u.id, u.username, u.role, u.is_approved, u.full_name, u.phone, u.avatar_base64, u.client_uuid, u.coach_name, u.coach_phone, u.pairing_code, u.pairing_code_created_at, u.is_private, u.telegram_id, u.telegram_username, u.two_factor_enabled, u.restrictions
       FROM auth_tokens t
       JOIN users u ON t.user_id = u.id
       WHERE t.token = ? AND t.expires_at > ?
     `);
-    return stmt.get(token, now) || null;
+    const found = stmt.get(token, now);
+    if (found) return found;
+
+    // Fallback: Verify stateless signed HMAC token if db restarted or token was evacuated
+    const payload = verifySignedToken(token);
+    if (payload && payload.userId && payload.expiresAt > now) {
+      const user = this.findUserById(payload.userId);
+      if (user) {
+        try {
+          this.createAuthToken(token, user.id, payload.expiresAt - now);
+        } catch (_) {}
+        return user;
+      }
+    }
+
+    return null;
   }
 
   deleteAuthToken(token) {
-    const stmt = this.db.prepare(`
-      DELETE FROM auth_tokens WHERE token = ?
-    `);
-    stmt.run(token);
+    if (!token || typeof token !== 'string') return;
+    try {
+      this.db.prepare('DELETE FROM auth_tokens WHERE token = ?').run(token);
+      this.db.prepare('INSERT OR REPLACE INTO revoked_tokens (token, revoked_at) VALUES (?, ?)').run(token, Date.now());
+    } catch (_) {}
   }
 
   getWorkoutSets(athleteId, date) {
     const session = this.getWorkoutSessionWithSets(athleteId, date);
     return session ? session.sets : [];
+  }
+
+  // --- Exercises Catalog Operations ---
+
+  getAllExercises() {
+    const stmt = this.db.prepare(`
+      SELECT id, name, muscle_group as muscleGroup, default_rest_seconds as defaultRestSeconds, is_custom as isCustom, created_at as createdAt
+      FROM exercises
+      ORDER BY muscle_group ASC, name ASC
+    `);
+    return stmt.all();
+  }
+
+  getExerciseById(id) {
+    const stmt = this.db.prepare(`
+      SELECT id, name, muscle_group as muscleGroup, default_rest_seconds as defaultRestSeconds, is_custom as isCustom
+      FROM exercises WHERE id = ?
+    `);
+    return stmt.get(Number(id)) || null;
+  }
+
+  findExerciseByName(name) {
+    const clean = String(name || '').trim();
+    if (!clean) return null;
+    const stmt = this.db.prepare(`
+      SELECT id, name, muscle_group as muscleGroup, default_rest_seconds as defaultRestSeconds, is_custom as isCustom
+      FROM exercises WHERE LOWER(name) = LOWER(?)
+    `);
+    return stmt.get(clean) || null;
+  }
+
+  createExercise(name, muscleGroup = 'Грудь', defaultRestSeconds = 90) {
+    const cleanName = String(name || '').trim();
+    const cleanGroup = String(muscleGroup || 'Грудь').trim();
+    const restSec = Number(defaultRestSeconds) || 90;
+    if (!cleanName) return null;
+
+    const stmt = this.db.prepare(`
+      INSERT INTO exercises (name, muscle_group, default_rest_seconds, is_custom)
+      VALUES (?, ?, ?, 1)
+    `);
+    const res = stmt.run(cleanName, cleanGroup, restSec);
+    return Number(res.lastInsertRowid);
+  }
+
+  updateExercise(id, name, muscleGroup, defaultRestSeconds) {
+    const exId = Number(id);
+    const cleanName = String(name || '').trim();
+    const cleanGroup = String(muscleGroup || 'Грудь').trim();
+    const restSec = Number(defaultRestSeconds) || 90;
+    if (!exId || !cleanName) return false;
+
+    const stmt = this.db.prepare(`
+      UPDATE exercises
+      SET name = ?, muscle_group = ?, default_rest_seconds = ?
+      WHERE id = ?
+    `);
+    stmt.run(cleanName, cleanGroup, restSec, exId);
+    return true;
+  }
+
+  deleteExercise(id) {
+    const exId = Number(id);
+    if (!exId) return false;
+    const stmt = this.db.prepare(`DELETE FROM exercises WHERE id = ?`);
+    stmt.run(exId);
+    return true;
   }
 
   close() {
