@@ -1392,22 +1392,16 @@ const server = http.createServer(async (req, res) => {
         }
       }
 
-      // VERSION CHECK: GET /api/version — mobile apps auto-update (Public)
+      // VERSION CHECK: GET /api/version — Inform clients that APK is deprecated and only Web PWA is supported
       if (pathname === '/api/version' && req.method === 'GET') {
-        const LATEST_VERSION = '2.0.1';
         const BASE_URL = process.env.RENDER_EXTERNAL_URL || 'https://fitness-ecosystem-pro.onrender.com';
         return sendJson(res, 200, {
-          latest: LATEST_VERSION,
-          athlete: {
-            version: LATEST_VERSION,
-            url: `${BASE_URL}/releases/athlete-pro-v${LATEST_VERSION}.apk`,
-            changelog: 'Версия 2.0.1: Pull-to-Refresh обновление как в браузере, таймер отдыха, редактирование подходов на сайте, синхронизация профиля, Telegram авторизация, 2FA защита'
-          },
-          trainer: {
-            version: LATEST_VERSION,
-            url: `${BASE_URL}/releases/trainer-pro-v${LATEST_VERSION}.apk`,
-            changelog: 'Версия 2.0.1: Pull-to-Refresh обновление как в браузере, мгновенная синхронизация, Telegram авторизация, 2FA защита, управление подходами'
-          }
+          apk_supported: false,
+          deprecated: true,
+          web_only: true,
+          latest: '2.5.2',
+          message: 'Android APK приложения отключены и больше не поддерживаются. Пожалуйста, используйте официальную веб-версию (PWA).',
+          web_url: BASE_URL
         });
       }
 
@@ -2645,30 +2639,13 @@ const server = http.createServer(async (req, res) => {
       return res.end('Access Denied');
     }
 
-    // Serve official Android APK downloads from releases directory (with GitHub fallback)
+    // APK downloads are disabled and discontinued: redirect to the web application
     if (safePathname.startsWith('/releases/') || safePathname.startsWith('releases/')) {
-      const fileName = path.basename(safePathname);
-      if (fileName.endsWith('.apk')) {
-        const apkPath = path.resolve(RELEASES_DIR, fileName);
-        if (apkPath.startsWith(RELEASES_DIR) && fs.existsSync(apkPath) && fs.statSync(apkPath).isFile()) {
-          res.writeHead(200, {
-            'Content-Type': 'application/vnd.android.package-archive',
-            'Content-Disposition': `attachment; filename="${fileName}"`,
-            'Content-Length': fs.statSync(apkPath).size
-          });
-          return fs.createReadStream(apkPath).pipe(res);
-        } else {
-          // Fallback: Redirect to GitHub Releases
-          const match = fileName.match(/v\d+\.\d+\.\d+/);
-          const tag = match ? match[0] : 'v2.0.0';
-          res.writeHead(302, {
-            'Location': `https://github.com/kotpers67-spec/fitness-ecosystem-pro/releases/download/${tag}/${fileName}`
-          });
-          return res.end();
-        }
-      }
-      res.writeHead(404);
-      return res.end('Release APK Not Found');
+      res.writeHead(302, {
+        'Location': '/',
+        'Content-Type': 'text/html; charset=utf-8'
+      });
+      return res.end('<!DOCTYPE html><html><head><meta http-equiv="refresh" content="0; url=/" /></head><body><p>Android APK приложения отключены. Перенаправление на веб-версию...</p></body></html>');
     }
 
     let relPath = safePathname.replace(/^\/+/, '');

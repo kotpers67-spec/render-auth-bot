@@ -56,7 +56,7 @@ async function handleLinkToken(ctx, token, db, userTgChatMap) {
       '🔑 <b>Что такое токен привязки:</b>\n' +
       'Это одноразовый 5-минутный код для связки вашего профиля (атлета или тренера) в приложении с Telegram-ботом.\n\n' +
       '📌 <b>Где взять токен:</b>\n' +
-      '1. Зайдите на сайт или в мобильное приложение <b>Fitness Ecosystem Pro</b>.\n' +
+      '1. Зайдите на официальный сайт <b>Fitness Ecosystem Pro</b>.\n' +
       '2. Перейдите в раздел <b>Профиль</b> (или карточку тренера/атлета).\n' +
       '3. Нажмите кнопку <b>«Привязать Telegram»</b>.\n' +
       '4. Скопируйте 5-минутный токен или нажмите ссылку для перехода в Telegram.\n\n' +
@@ -240,7 +240,7 @@ function setupBotHandlers(bot, { db, telegramOtpStore, telegramSessionStore, use
       if (!session || now > session.expiresAt) {
         await ctx.reply(
           '⚠️ <b>Срок действия сессии входа истёк (5 минут).</b>\n\n' +
-          'Нажмите кнопку «Войти через Telegram» на сайте или в приложении заново.',
+          'Нажмите кнопку «Войти через Telegram» на сайте заново.',
           { parse_mode: 'HTML', reply_markup: createMainMenuKeyboard() }
         );
         return;
@@ -411,7 +411,7 @@ function setupBotHandlers(bot, { db, telegramOtpStore, telegramSessionStore, use
           `👉 <code>${otp}</code> 👈\n` +
           `<i>(нажмите на код, чтобы скопировать)</i>\n\n` +
           `⏱ Действует: <b>5 минут</b>.\n` +
-          `Введите этот код в окне браузера или приложения для завершения авторизации.`,
+          `Введите этот код в окне браузера для завершения авторизации.`,
           {
             parse_mode: 'HTML',
             reply_markup: createOwnersKeyboard()
@@ -472,7 +472,7 @@ function setupBotHandlers(bot, { db, telegramOtpStore, telegramSessionStore, use
         `⚡ <b>Вход в Fitness Ecosystem Pro выполнен в 1 клик!</b>\n\n` +
         `👤 Профиль: <b>${user.full_name || fullName}</b>\n` +
         `🏷 Роль: <b>${roleTitle}</b>\n\n` +
-        `🚀 В браузере или мобильном приложении вход произошёл автоматически!\n` +
+        `🚀 В браузере вход произошёл автоматически!\n` +
         `Вы можете вернуться в открытое окно.`,
         {
           parse_mode: 'HTML',
@@ -495,7 +495,7 @@ function setupBotHandlers(bot, { db, telegramOtpStore, telegramSessionStore, use
         `🔐 <b>Код авторизации в системе:</b>\n\n` +
         `👉 <code>${code}</code> 👈\n\n` +
         `⏱ Код действителен в течение <b>5 минут</b>.\n` +
-        `Введите этот код в форме входа на сайте или в приложении.\n\n` +
+        `Введите этот код в форме входа на сайте.\n\n` +
         `⚠️ <b>Безопасность:</b> Никому не передавайте этот код!`,
         {
           parse_mode: 'HTML',
@@ -509,7 +509,7 @@ function setupBotHandlers(bot, { db, telegramOtpStore, telegramSessionStore, use
     const { code, user } = getUnifiedUserCode(tgId, username, db, telegramOtpStore, cloudSyncService);
 
     const hint = (user && user.role === 'athlete')
-      ? 'ℹ️ Этот же код отображается в вашем профиле на сайте и в мобильном приложении.\n\n'
+      ? 'ℹ️ Этот же код отображается в вашем профиле на сайте.\n\n'
       : '';
 
     await ctx.reply(
@@ -535,9 +535,9 @@ function setupBotHandlers(bot, { db, telegramOtpStore, telegramSessionStore, use
       return ctx.reply(
         '🔗 <b>Привязка аккаунта к Telegram</b>\n\n' +
         '🔑 <b>Что такое токен привязки:</b>\n' +
-        'Это одноразовый 5-минутный код для связки вашего профиля (атлета или тренера) на сайте или в приложении с этим Telegram-ботом.\n\n' +
+        'Это одноразовый 5-минутный код для связки вашего профиля (атлета или тренера) на сайте с этим Telegram-ботом.\n\n' +
         '📌 <b>Откуда его брать:</b>\n' +
-        '1. Откройте сайт или мобильное приложение <b>Fitness Ecosystem Pro</b>.\n' +
+        '1. Откройте сайт <b>Fitness Ecosystem Pro</b>.\n' +
         '2. Перейдите в раздел <b>Профиль</b> (или карточку тренера/атлета).\n' +
         '3. Нажмите кнопку <b>«Привязать Telegram»</b> — система сгенерирует токен.\n' +
         '4. Скопируйте токен или нажмите прямую кнопку перехода в Telegram.\n\n' +
@@ -559,7 +559,7 @@ function setupBotHandlers(bot, { db, telegramOtpStore, telegramSessionStore, use
     const { code, user } = getUnifiedUserCode(tgId, username, db, telegramOtpStore, cloudSyncService);
 
     const hint = (user && user.role === 'athlete')
-      ? '\n\nℹ️ Этот же код отображается в вашем профиле на сайте и в мобильном приложении.'
+      ? '\n\nℹ️ Этот же код отображается в вашем профиле на сайте.'
       : '';
 
     await ctx.reply(
@@ -580,7 +580,7 @@ function setupBotHandlers(bot, { db, telegramOtpStore, telegramSessionStore, use
     await ctx.reply(
       `🔗 <b>Привязка аккаунта к Telegram</b>\n\n` +
       `🔑 <b>Откуда брать токен привязки:</b>\n` +
-      `1. Откройте сайт или мобильное приложение <b>Fitness Ecosystem Pro</b>.\n` +
+      `1. Откройте сайт <b>Fitness Ecosystem Pro</b>.\n` +
       `2. Перейдите в раздел <b>Профиль</b> (или карточку тренера/атлета).\n` +
       `3. Нажмите <b>«Привязать Telegram»</b> для генерации 5-минутного токена.\n` +
       `4. Отправьте в этот чат команду:\n\n` +
@@ -597,7 +597,7 @@ function setupBotHandlers(bot, { db, telegramOtpStore, telegramSessionStore, use
     await ctx.reply(
       `🤝 <b>Связь с создателями Fitness Ecosystem Pro:</b>\n\n` +
       `• <b>@SantiLA213</b> — Архитектура, продукты и партнерства\n` +
-      `• <b>@Spirit5449</b> — Backend, безопасность и мобильная разработка\n\n` +
+      `• <b>@Spirit5449</b> — Backend, безопасность и веб-разработка\n\n` +
       `Нажмите на кнопку ниже, чтобы начать диалог в Telegram:`,
       {
         parse_mode: 'HTML',
@@ -720,7 +720,7 @@ function setupBotHandlers(bot, { db, telegramOtpStore, telegramSessionStore, use
     if (!text.startsWith('/start') && !text.startsWith('/code') && !text.startsWith('/login') && !text.startsWith('/contacts') && !text.startsWith('/help')) {
       const { code, user } = getUnifiedUserCode(tgId, username, db, telegramOtpStore, cloudSyncService);
       const hint = (user && user.role === 'athlete')
-        ? '\n\nℹ️ Этот же код отображается в вашем профиле на сайте и в мобильном приложении.'
+        ? '\n\nℹ️ Этот же код отображается в вашем профиле на сайте.'
         : '';
       await ctx.reply(
         `🔐 Ваш единый код для входа на сайт и подключения тренера:\n\n` +

@@ -3936,6 +3936,8 @@
       btn.onclick = openDownloadDialog;
     });
     if (el.btnCloseDownloadDialog) el.btnCloseDownloadDialog.onclick = closeDownloadDialog;
+    const btnCloseFooter = document.getElementById('btn-close-download-dialog-footer');
+    if (btnCloseFooter) btnCloseFooter.onclick = closeDownloadDialog;
 
     // Trigger PWA Installation Prompt
     async function triggerPwaInstall() {
